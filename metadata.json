@@ -1,0 +1,6 @@
+{
+  "name": "Australia Driving License Simulator 2026",
+  "description": "Interactive 3D driving test simulator and test guide based on 2026 Australian Road Rules, featuring authentic road signs, line markings, roundabouts, and practical assessment criteria.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
