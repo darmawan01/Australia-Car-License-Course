@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { CameraView, DrivingLevel, TestFault, TestMode, TestTask } from '../types';
+import { CameraView, DrivingLevel, RoadCheckpoint, TestFault, TestMode, TestTask } from '../types';
 import {
   CheckCircle2,
   AlertOctagon,
@@ -12,7 +12,10 @@ import {
   Sparkles,
   Award,
   ChevronDown,
-  ChevronUp
+  ChevronUp,
+  Target,
+  Navigation,
+  Compass
 } from 'lucide-react';
 
 interface AssessmentHUDProps {
@@ -29,6 +32,18 @@ interface AssessmentHUDProps {
   onSelectPrevLevel?: () => void;
   timeElapsed: number;
   isLevelPassed?: boolean;
+  activeCheckpoint?: RoadCheckpoint;
+  activeCheckpointIndex?: number;
+  totalCheckpoints?: number;
+  distanceToTarget?: number;
+  showCarBeacon?: boolean;
+  onToggleCarBeacon?: () => void;
+  autoAdvance?: {
+    nextLevel: DrivingLevel;
+    countdown: number;
+    completedLevelTitle: string;
+  } | null;
+  onCancelAutoAdvance?: () => void;
 }
 
 export const AssessmentHUD: React.FC<AssessmentHUDProps> = ({
@@ -44,7 +59,15 @@ export const AssessmentHUD: React.FC<AssessmentHUDProps> = ({
   onSelectNextLevel,
   onSelectPrevLevel,
   timeElapsed,
-  isLevelPassed
+  isLevelPassed,
+  activeCheckpoint,
+  activeCheckpointIndex = 0,
+  totalCheckpoints = 10,
+  distanceToTarget = 0,
+  showCarBeacon = true,
+  onToggleCarBeacon,
+  autoAdvance,
+  onCancelAutoAdvance
 }) => {
   const [isCollapsed, setIsCollapsed] = useState<boolean>(false);
 
@@ -89,6 +112,20 @@ export const AssessmentHUD: React.FC<AssessmentHUDProps> = ({
             <span className="px-1.5 py-0.5 rounded bg-slate-900 border border-slate-800 text-[10px] font-mono font-bold text-slate-300">
               {formatTime(timeElapsed)}
             </span>
+            {onToggleCarBeacon && (
+              <button
+                id="toggle-car-beacon-btn"
+                onClick={onToggleCarBeacon}
+                className={`p-1 rounded-lg border transition-colors ${
+                  showCarBeacon
+                    ? 'bg-cyan-950/70 border-cyan-500/40 text-cyan-300 hover:bg-cyan-900/60'
+                    : 'bg-slate-900 border-slate-800 text-slate-500 hover:text-slate-300'
+                }`}
+                title={showCarBeacon ? 'Hide Floating Car Waypoint' : 'Show Floating Car Waypoint'}
+              >
+                <Navigation className="w-3 h-3" />
+              </button>
+            )}
             <button
               id="hud-collapse-btn"
               onClick={() => setIsCollapsed(prev => !prev)}
@@ -107,6 +144,21 @@ export const AssessmentHUD: React.FC<AssessmentHUDProps> = ({
             </button>
           </div>
         </div>
+
+        {/* Active Checkpoint Milestone Indicator */}
+        {activeCheckpoint && (
+          <div className="bg-slate-900/90 border border-slate-800/90 rounded-xl px-2.5 py-1.5 flex items-center justify-between text-[11px] font-mono">
+            <div className="flex items-center gap-1.5 text-cyan-300 truncate">
+              <Target className="w-3.5 h-3.5 text-cyan-400 shrink-0 animate-pulse" />
+              <span className="truncate font-bold">
+                WP {activeCheckpointIndex + 1}/{totalCheckpoints}: {activeCheckpoint.title.replace(/^Checkpoint\s*\d+:\s*/, '')}
+              </span>
+            </div>
+            <span className="text-amber-300 font-bold ml-2 shrink-0 bg-black/40 px-1.5 py-0.5 rounded border border-amber-500/30">
+              {distanceToTarget}m
+            </span>
+          </div>
+        )}
 
         {!isCollapsed && (
           <>
@@ -134,14 +186,56 @@ export const AssessmentHUD: React.FC<AssessmentHUDProps> = ({
           </>
         )}
 
-        {/* Level Success Prompt */}
-        {isLevelPassed && (
+        {/* Auto-Advance / Level Success Banner */}
+        {autoAdvance ? (
+          <div className="p-3 bg-gradient-to-r from-emerald-950 via-teal-950 to-slate-950 border-2 border-emerald-400/80 rounded-xl flex flex-col gap-2 text-emerald-200 shadow-2xl animate-in zoom-in-95 duration-200">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <Trophy className="w-5 h-5 text-emerald-400 shrink-0" />
+                <div>
+                  <span className="text-xs font-black text-white uppercase tracking-wide block">
+                    {autoAdvance.completedLevelTitle} Passed!
+                  </span>
+                  <span className="text-[11px] text-emerald-300 block font-medium">
+                    Moving to <strong className="text-white">{autoAdvance.nextLevel.badge}</strong> in{' '}
+                    <span className="font-mono text-amber-300 font-black text-xs px-1.5 py-0.5 rounded bg-black/40 border border-amber-500/40">
+                      {autoAdvance.countdown}s
+                    </span>
+                  </span>
+                </div>
+              </div>
+              <div className="w-8 h-8 rounded-full border-2 border-emerald-400 flex items-center justify-center font-mono font-black text-white text-xs bg-emerald-900/60 shrink-0">
+                {autoAdvance.countdown}
+              </div>
+            </div>
+
+            <div className="flex items-center gap-2 pt-1">
+              <button
+                id="hud-auto-advance-now-btn"
+                onClick={() => onSelectNextLevel && onSelectNextLevel()}
+                className="flex-1 py-1.5 px-3 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-black text-xs flex items-center justify-center gap-1.5 shadow-lg shadow-emerald-500/40 transition-all uppercase tracking-wider"
+              >
+                <span>Move to Next Course Now</span>
+                <ChevronRight className="w-3.5 h-3.5" />
+              </button>
+              {onCancelAutoAdvance && (
+                <button
+                  id="hud-cancel-auto-advance-btn"
+                  onClick={onCancelAutoAdvance}
+                  className="py-1.5 px-2.5 rounded-lg bg-slate-900 hover:bg-slate-800 text-slate-300 hover:text-white text-xs border border-slate-700 transition-colors shrink-0"
+                >
+                  Stay
+                </button>
+              )}
+            </div>
+          </div>
+        ) : isLevelPassed ? (
           <div className="p-2.5 bg-emerald-950/90 border border-emerald-500/80 rounded-xl flex items-center justify-between text-emerald-200 animate-in fade-in duration-300">
             <div className="flex items-center gap-2">
               <Trophy className="w-4 h-4 text-emerald-400" />
               <div>
                 <span className="text-xs font-bold text-white">Level Complete!</span>
-                <span className="text-[10px] text-emerald-300 block">3 Stars Earned</span>
+                <span className="text-[10px] text-emerald-300 block">All Objectives Passed</span>
               </div>
             </div>
 
@@ -151,12 +245,12 @@ export const AssessmentHUD: React.FC<AssessmentHUDProps> = ({
                 onClick={onSelectNextLevel}
                 className="px-2.5 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs flex items-center gap-1 shadow-md shadow-emerald-600/30"
               >
-                <span>Next</span>
+                <span>Next Course</span>
                 <ChevronRight className="w-3.5 h-3.5" />
               </button>
             )}
           </div>
-        )}
+        ) : null}
 
         {/* Critical Fail Alert */}
         {criticalFailItem && (

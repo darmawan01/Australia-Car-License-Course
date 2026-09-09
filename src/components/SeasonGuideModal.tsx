@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
-import { CURRICULUM_SEASONS, CurriculumSeason } from '../data/curriculumSeasons';
+import { CURRICULUM_SEASONS } from '../data';
+import { CurriculumSeason } from '../types';
 import {
   BookOpen,
   CheckCircle2,

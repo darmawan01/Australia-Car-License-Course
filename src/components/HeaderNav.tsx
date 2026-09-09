@@ -190,14 +190,19 @@ export const HeaderNav: React.FC<HeaderNavProps> = ({
           <kbd className="hidden sm:inline px-1 py-0.2 rounded bg-slate-800 text-[9px] font-mono text-slate-400">C</kbd>
         </button>
 
-        {/* Day / Night Mode Toggle */}
+        {/* Day / Night Vision Mode Toggle */}
         <button
           id="nightmode-toggle-btn"
           onClick={onToggleNightMode}
-          className="p-2 rounded-xl bg-slate-900 hover:bg-slate-800 border border-slate-800 text-slate-300 hover:text-white transition-colors"
-          title={isNightMode ? 'Switch to Daytime' : 'Switch to Night Driving'}
+          className={`px-2.5 py-1.5 rounded-xl border font-bold flex items-center gap-1.5 transition-all ${
+            isNightMode
+              ? 'bg-amber-500/20 text-amber-300 border-amber-500/50 shadow-md shadow-amber-500/10'
+              : 'bg-slate-900 hover:bg-slate-850 text-slate-300 hover:text-white border-slate-800'
+          }`}
+          title={isNightMode ? 'Night Vision Active (Click for Daylight)' : 'Switch to Night Vision (Road Streetlights & Headlights)'}
         >
-          {isNightMode ? <SunMedium className="w-3.5 h-3.5 text-amber-400" /> : <Moon className="w-3.5 h-3.5 text-blue-400" />}
+          {isNightMode ? <Moon className="w-3.5 h-3.5 text-blue-400 fill-blue-400/20" /> : <SunMedium className="w-3.5 h-3.5 text-amber-400" />}
+          <span className="hidden sm:inline text-xs">{isNightMode ? 'Night Vision' : 'Daylight'}</span>
         </button>
 
         {/* Reset Car */}

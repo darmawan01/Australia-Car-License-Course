@@ -28,13 +28,14 @@ import { HeaderNav } from './components/HeaderNav';
 import { LicenseGuide2026 } from './components/LicenseGuide2026';
 import { SeasonGuideModal } from './components/SeasonGuideModal';
 import { SeasonPracticeHUD } from './components/SeasonPracticeHUD';
-import { CURRICULUM_SEASONS, CurriculumSeason } from './data/curriculumSeasons';
+import { CURRICULUM_SEASONS, CurriculumSeason } from './data';
 import { TestResultModal } from './components/TestResultModal';
 import { HazardControlPanel } from './components/HazardControlPanel';
 import { LevelSelectModal } from './components/LevelSelectModal';
 import { ShortcutsModal } from './components/ShortcutsModal';
 import { FloatingShortcutsBar } from './components/FloatingShortcutsBar';
 import { soundManager } from './utils/audio';
+import confetti from 'canvas-confetti';
 import { AlertCircle, ChevronDown, ChevronUp, Zap } from 'lucide-react';
 
 const INITIAL_VEHICLE_STATE: VehicleState = {
@@ -136,24 +137,12 @@ export default function App() {
   const [carScreenPos, setCarScreenPos] = useState<CarScreenPos>({ x: typeof window !== 'undefined' ? window.innerWidth / 2 : 500, y: 320, isVisible: true });
   const [checkpointNotice, setCheckpointNotice] = useState<{ show: boolean; text: string; sub: string } | null>(null);
   const [laneAlert, setLaneAlert] = useState<{ type: string; message: string; ruleRef: string } | null>(null);
-
-  const handleCheckpointPassed = useCallback((checkpointId: number, title: string) => {
-    setCompletedCheckpointIds(prev => {
-      if (!prev.includes(checkpointId)) {
-        return [...prev, checkpointId];
-      }
-      return prev;
-    });
-    setActiveCheckpointIndex(prev => Math.min(ROAD_CHECKPOINTS.length - 1, prev + 1));
-    setCheckpointNotice({
-      show: true,
-      text: `CHECKPOINT ${checkpointId} CLEARED!`,
-      sub: title
-    });
-    setTimeout(() => {
-      setCheckpointNotice(null);
-    }, 3200);
-  }, []);
+  const [showCarGuide, setShowCarGuide] = useState<boolean>(true);
+  const [autoAdvance, setAutoAdvance] = useState<{
+    nextLevel: DrivingLevel;
+    countdown: number;
+    completedLevelTitle: string;
+  } | null>(null);
 
   // Dynamic Speed limit based on location & level (School Zone is z from -45 to -165)
   const isSchoolZoneArea = vehicleState.z < -45 && vehicleState.z > -165;
@@ -481,14 +470,15 @@ export default function App() {
     }
   }, [currentMode, triggerFail]);
 
-  // Complete a level with stars calculation
-  const completeLevel = useCallback((levelId: number) => {
+  // Complete a level with stars calculation and auto-advance queue
+  const completeLevel = useCallback((levelId: number, targetNextLevelId?: number) => {
     setIsLevelPassed(true);
     soundManager.playSuccessChime();
 
     // Calculate stars: 3 stars if 0 minor faults, 2 stars if <=2 faults, 1 star otherwise
     const stars = minorFaults.length === 0 ? 3 : minorFaults.length <= 2 ? 2 : 1;
     const score = Math.max(60, 100 - minorFaults.length * 10);
+    const nextId = targetNextLevelId ?? (levelId + 1);
 
     setLevelProgress(prev => {
       const nextProgress = { ...prev };
@@ -501,16 +491,112 @@ export default function App() {
       };
 
       // Unlock next level
-      if (levelId < 11 && nextProgress[levelId + 1]) {
-        nextProgress[levelId + 1] = {
-          ...nextProgress[levelId + 1],
+      if (nextId <= DRIVING_LEVELS.length && nextProgress[nextId]) {
+        nextProgress[nextId] = {
+          ...nextProgress[nextId],
           unlocked: true
         };
       }
 
       return nextProgress;
     });
-  }, [minorFaults.length, timeElapsed]);
+
+    const nextLevelObj = DRIVING_LEVELS.find(l => l.id === nextId);
+
+    // If final course level (Course 5) is completed OR all 9 checkpoints completed:
+    if (levelId === 5 || levelId === 10) {
+      try {
+        confetti({ particleCount: 90, spread: 75, origin: { y: 0.55 } });
+      } catch (e) {
+        console.warn('Confetti error', e);
+      }
+      setTestResult({
+        passed: true,
+        score,
+        totalScore: 100,
+        minorFaults,
+        tasksCompleted: 9,
+        totalTasks: 9,
+        timeElapsed,
+        completedAt: new Date().toLocaleTimeString(),
+        state: 'NSW'
+      });
+    }
+
+    if (nextLevelObj) {
+      const currentLevelObj = DRIVING_LEVELS.find(l => l.id === levelId);
+      setAutoAdvance({
+        nextLevel: nextLevelObj,
+        countdown: 5,
+        completedLevelTitle: currentLevelObj?.title || `Course ${levelId}`
+      });
+    }
+  }, [minorFaults, timeElapsed]);
+
+  // Checkpoint Passed Handler - Synchronizes Road Checkpoints with Course Level Progression!
+  const handleCheckpointPassed = useCallback((checkpointId: number, title: string) => {
+    let updatedCompleted = completedCheckpointIds;
+    if (!completedCheckpointIds.includes(checkpointId)) {
+      updatedCompleted = [...completedCheckpointIds, checkpointId];
+      setCompletedCheckpointIds(updatedCompleted);
+    }
+
+    // Advance active checkpoint index
+    const nextCpIdx = Math.min(ROAD_CHECKPOINTS.length - 1, checkpointId);
+    setActiveCheckpointIndex(nextCpIdx);
+
+    // Map road milestones to Course levels 1-5
+    let completedCourseLevelId: number | null = null;
+    let nextCourseLevelId: number | null = null;
+
+    if (checkpointId === 1) {
+      // Checkpoint 1 (Kerb Departure & Moving Off) completes Course 1!
+      completedCourseLevelId = 1;
+      nextCourseLevelId = 2;
+    } else if (checkpointId === 2) {
+      // Checkpoint 2 (Keep-Left Suburban Lane) completes Course 2!
+      completedCourseLevelId = 2;
+      nextCourseLevelId = 3;
+    } else if (checkpointId === 4 || (checkpointId === 3 && currentLevelId === 3)) {
+      // Checkpoint 3/4 (School Zone & Pedestrian Crossing) completes Course 3!
+      completedCourseLevelId = 3;
+      nextCourseLevelId = 4;
+    } else if (checkpointId === 7) {
+      // Checkpoint 7 (STOP Sign Transverse Line) completes Course 4!
+      completedCourseLevelId = 4;
+      nextCourseLevelId = 5;
+    } else if (checkpointId === 9 || checkpointId === 10 || updatedCompleted.length >= ROAD_CHECKPOINTS.length) {
+      // Checkpoint 9/10 (Finish Line) completes Course 5! Auto-advances to Level 6: Practice 1
+      completedCourseLevelId = 5;
+      nextCourseLevelId = 6;
+    }
+
+    if (completedCourseLevelId) {
+      completeLevel(completedCourseLevelId, nextCourseLevelId || undefined);
+    }
+
+    const isAllDone = checkpointId >= 9 || updatedCompleted.length >= ROAD_CHECKPOINTS.length;
+    const nextLevelObj = nextCourseLevelId ? DRIVING_LEVELS.find(l => l.id === nextCourseLevelId) : null;
+    const bannerTitle = isAllDone
+      ? '🎉 COURSE COMPLETE: 9/9 CHECKPOINTS CLEARED!'
+      : nextLevelObj
+      ? `ADVANCED TO ${nextLevelObj.badge.toUpperCase()}!`
+      : `CHECKPOINT ${checkpointId} CLEARED!`;
+
+    const bannerSub = isAllDone
+      ? 'All checkpoints cleared! Auto-moving to Next Course (Practice Drills)...'
+      : `${title} • ${nextLevelObj ? nextLevelObj.title : 'Waypoint cleared!'}`;
+
+    setCheckpointNotice({
+      show: true,
+      text: bannerTitle,
+      sub: bannerSub
+    });
+
+    setTimeout(() => {
+      setCheckpointNotice(null);
+    }, 4500);
+  }, [completedCheckpointIds, completeLevel, currentLevelId]);
 
   // Interactive Hazard & Traffic Handlers
   const handleTriggerHazard = useCallback((type: HazardType) => {
@@ -612,7 +698,7 @@ export default function App() {
   const handleParkAlignCheck = useCallback((isSuccess: boolean) => {
     if (isSuccess) {
       soundManager.playSuccessChime();
-      if (currentLevel.id === 2) {
+      if (currentLevel.id === 5 || currentLevel.id === 2) {
         completeLevel(currentLevel.id);
       }
     }
@@ -627,18 +713,41 @@ export default function App() {
     setTestResult(null);
     setTimeElapsed(0);
     setIsTestRunning(true);
-    setActiveCheckpointIndex(0);
-    setCompletedCheckpointIds([]);
+
+    // Map selected course level to corresponding starting checkpoint
+    let startingCheckpointIdx = 0;
+    const completedIds: number[] = [];
+    if (level.id === 1) {
+      startingCheckpointIdx = 0; // Checkpoint 1 (Kerb Departure)
+    } else if (level.id === 2) {
+      startingCheckpointIdx = 1; // Checkpoint 2 (Keep-Left)
+      completedIds.push(1);
+    } else if (level.id === 3) {
+      startingCheckpointIdx = 2; // Checkpoint 3 (School Zone)
+      completedIds.push(1, 2);
+    } else if (level.id === 4) {
+      startingCheckpointIdx = 6; // Checkpoint 7 (Stop sign at z = -285)
+      completedIds.push(1, 2, 3, 4, 5, 6);
+    } else if (level.id === 5) {
+      startingCheckpointIdx = 8; // Checkpoint 9 (Reverse parallel park at z = -360)
+      completedIds.push(1, 2, 3, 4, 5, 6, 7, 8);
+    } else {
+      startingCheckpointIdx = 0;
+    }
+
+    setActiveCheckpointIndex(startingCheckpointIdx);
+    setCompletedCheckpointIds(completedIds);
 
     // Position vehicle according to level spawn coordinates
+    const hasInitialSpeed = Boolean(level.spawnSpeed && level.spawnSpeed > 0);
     setVehicleState({
       ...INITIAL_VEHICLE_STATE,
       x: level.spawnX,
       z: level.spawnZ,
       rotation: level.spawnRotation || 0,
-      gear: 'P',
-      handbrake: true,
-      speed: 0
+      gear: hasInitialSpeed ? 'D' : 'P',
+      handbrake: !hasInitialSpeed,
+      speed: level.spawnSpeed || 0
     });
 
     // If level has an initial hazard, trigger it
@@ -657,6 +766,34 @@ export default function App() {
       handleSelectLevel(DRIVING_LEVELS[currentLevelId]); // 0-indexed matches currentLevelId
     }
   }, [currentLevelId, handleSelectLevel]);
+
+  // Auto-advance countdown interval
+  useEffect(() => {
+    if (!autoAdvance) return;
+    if (autoAdvance.countdown <= 0) {
+      const targetLvl = autoAdvance.nextLevel;
+      setAutoAdvance(null);
+      handleSelectLevel(targetLvl);
+      return;
+    }
+
+    const timer = setTimeout(() => {
+      setAutoAdvance(prev => (prev ? { ...prev, countdown: prev.countdown - 1 } : null));
+    }, 1000);
+
+    return () => clearTimeout(timer);
+  }, [autoAdvance, handleSelectLevel]);
+
+  // Proceed immediately to next course
+  const handleProceedToNextCourse = useCallback(() => {
+    if (autoAdvance) {
+      const target = autoAdvance.nextLevel;
+      setAutoAdvance(null);
+      handleSelectLevel(target);
+    } else {
+      handleSelectNextLevel();
+    }
+  }, [autoAdvance, handleSelectLevel, handleSelectNextLevel]);
 
   const handleSelectPrevLevel = useCallback(() => {
     if (currentLevelId > 1) {
@@ -712,7 +849,8 @@ export default function App() {
     setPracticeStepIndex(0);
     setIsPracticingSeason(true);
     setIsSeasonGuideOpen(false);
-    handleSelectLevel(season.levelId);
+    const targetLevel = DRIVING_LEVELS.find(l => l.id === season.id) || DRIVING_LEVELS[0];
+    handleSelectLevel(targetLevel);
   };
 
   return (
@@ -727,7 +865,19 @@ export default function App() {
         licenseStage={licenseStage}
         onSelectLicenseStage={setLicenseStage}
         isNightMode={isNightMode}
-        onToggleNightMode={() => setIsNightMode(prev => !prev)}
+        onToggleNightMode={() => {
+          setIsNightMode(prev => {
+            const next = !prev;
+            if (next) {
+              setVehicleState(v => ({
+                ...v,
+                headlights: true,
+                headlightMode: v.headlightMode === 'off' ? 'low' : v.headlightMode
+              }));
+            }
+            return next;
+          });
+        }}
         onOpenGuide={() => setIsSeasonGuideOpen(true)}
         onOpenShortcuts={() => setIsShortcutsOpen(true)}
         onResetCar={handleResetCar}
@@ -768,6 +918,24 @@ export default function App() {
         carScreenPos={carScreenPos}
         onSelectCheckpointSlide={(idx) => {}}
         onResetToActive={() => {}}
+        isVisible={showCarGuide}
+        onClose={() => setShowCarGuide(false)}
+        onMoveToNextCourse={handleProceedToNextCourse}
+        onOpenTestResult={() => {
+          setTestResult({
+            passed: true,
+            score: Math.max(75, 100 - minorFaults.length * 10),
+            totalScore: 100,
+            minorFaults,
+            tasksCompleted: 9,
+            totalTasks: 9,
+            timeElapsed,
+            completedAt: new Date().toLocaleTimeString(),
+            state: 'NSW'
+          });
+        }}
+        autoAdvanceCountdown={autoAdvance?.countdown ?? null}
+        nextCourseTitle={autoAdvance ? `${autoAdvance.nextLevel.badge}: ${autoAdvance.nextLevel.title}` : undefined}
       />
 
       {/* High-Visibility Australian Lane Discipline Infraction Alert Banner */}
@@ -844,6 +1012,22 @@ export default function App() {
           onSelectPrevLevel={handleSelectPrevLevel}
           timeElapsed={timeElapsed}
           isLevelPassed={isLevelPassed}
+          activeCheckpoint={ROAD_CHECKPOINTS[activeCheckpointIndex]}
+          activeCheckpointIndex={activeCheckpointIndex}
+          totalCheckpoints={ROAD_CHECKPOINTS.length}
+          distanceToTarget={Math.max(
+            0,
+            Math.round(
+              Math.hypot(
+                vehicleState.x - (ROAD_CHECKPOINTS[activeCheckpointIndex]?.targetX || 0),
+                vehicleState.z - (ROAD_CHECKPOINTS[activeCheckpointIndex]?.targetZ || 0)
+              )
+            )
+          )}
+          showCarBeacon={showCarGuide}
+          onToggleCarBeacon={() => setShowCarGuide(prev => !prev)}
+          autoAdvance={autoAdvance}
+          onCancelAutoAdvance={() => setAutoAdvance(null)}
         />
       )}
 
@@ -958,6 +1142,7 @@ export default function App() {
         onRetake={handleResetCar}
         onUpgradeLicense={handleUpgradeLicense}
         onClose={() => setTestResult(null)}
+        onNextCourse={handleSelectNextLevel}
       />
     </div>
   );

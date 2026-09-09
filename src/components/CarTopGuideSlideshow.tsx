@@ -14,7 +14,8 @@ import {
   Layers,
   ArrowUp,
   ArrowLeft,
-  ArrowRight
+  ArrowRight,
+  X
 } from 'lucide-react';
 import { soundManager } from '../utils/audio';
 
@@ -26,6 +27,12 @@ interface CarTopGuideSlideshowProps {
   carScreenPos?: CarScreenPos;
   onSelectCheckpointSlide?: (index: number) => void;
   onResetToActive?: () => void;
+  isVisible?: boolean;
+  onClose?: () => void;
+  onMoveToNextCourse?: () => void;
+  onOpenTestResult?: () => void;
+  autoAdvanceCountdown?: number | null;
+  nextCourseTitle?: string;
 }
 
 export const CarTopGuideSlideshow: React.FC<CarTopGuideSlideshowProps> = ({
@@ -35,16 +42,25 @@ export const CarTopGuideSlideshow: React.FC<CarTopGuideSlideshowProps> = ({
   vehicleState,
   carScreenPos,
   onSelectCheckpointSlide,
-  onResetToActive
+  onResetToActive,
+  isVisible = true,
+  onClose,
+  onMoveToNextCourse,
+  onOpenTestResult,
+  autoAdvanceCountdown,
+  nextCourseTitle
 }) => {
   const [currentSlideIndex, setCurrentSlideIndex] = useState<number>(activeCheckpointIndex);
-  const [isMinimized, setIsMinimized] = useState<boolean>(false);
+  // Default to minimal waypoint pill so it doesn't block car view or duplicate the top-left HUD
+  const [isMinimized, setIsMinimized] = useState<boolean>(true);
   const [dockMode, setDockMode] = useState<'above_car' | 'top_center'>('above_car');
 
   // Sync slide with active checkpoint when active checkpoint advances
   useEffect(() => {
     setCurrentSlideIndex(activeCheckpointIndex);
   }, [activeCheckpointIndex]);
+
+  if (!isVisible) return null;
 
   const slide = checkpoints[currentSlideIndex] || checkpoints[0];
   const activeCheckpoint = checkpoints[activeCheckpointIndex] || checkpoints[0];
@@ -115,32 +131,63 @@ export const CarTopGuideSlideshow: React.FC<CarTopGuideSlideshowProps> = ({
     };
   };
 
+  const isAllCheckpointsCleared = completedCheckpointIds.length >= checkpoints.length;
+
   return (
     <div
+      id="car-top-guide-slideshow"
       style={getContainerStyle()}
       className="pointer-events-auto z-25 transition-all duration-150 flex flex-col items-center max-w-[92vw] sm:max-w-md"
     >
       {/* MINIMIZED FLOATING PILL */}
       {isMinimized ? (
-        <div
-          onClick={() => setIsMinimized(false)}
-          className="cursor-pointer bg-slate-950/90 hover:bg-slate-900 border border-blue-500/50 rounded-full px-3.5 py-1.5 shadow-2xl backdrop-blur-md flex items-center gap-2.5 text-xs text-white animate-in fade-in select-none group"
-        >
-          <div className="w-2.5 h-2.5 rounded-full bg-cyan-400 animate-ping shrink-0" />
-          <span className="font-mono font-bold text-cyan-300">
-            CP {activeCheckpoint.id}: {activeDist}m ahead
+        <div className={`border rounded-full pl-3 pr-1.5 py-1 shadow-2xl backdrop-blur-md flex items-center gap-2 text-xs text-white animate-in fade-in select-none group ${
+          isAllCheckpointsCleared
+            ? 'bg-emerald-950/95 border-emerald-400/80 shadow-emerald-900/50'
+            : 'bg-slate-950/92 hover:bg-slate-900 border-cyan-500/50'
+        }`}>
+          <div className={`w-2 h-2 rounded-full shrink-0 ${isAllCheckpointsCleared ? 'bg-emerald-400' : 'bg-cyan-400 animate-ping'}`} />
+          <span className={`font-mono font-bold whitespace-nowrap ${isAllCheckpointsCleared ? 'text-emerald-300' : 'text-cyan-300'}`}>
+            {isAllCheckpointsCleared ? '🎉 COURSE FINISHED (9/9)' : `WP ${activeCheckpoint.id}: ${activeDist}m ahead`}
           </span>
-          <span className="text-slate-400 text-[11px] hidden sm:inline truncate max-w-[180px]">
-            • {activeCheckpoint.hint}
+          <span className="text-slate-400 text-[11px] hidden sm:inline truncate max-w-[140px]">
+            {isAllCheckpointsCleared ? '• Click to Move Next' : `• ${activeCheckpoint.hint}`}
           </span>
-          <div className="flex items-center gap-1 text-[10px] text-blue-400 group-hover:text-blue-300 font-bold bg-blue-950/60 px-2 py-0.5 rounded-full border border-blue-800">
-            <span>Slide {currentSlideIndex + 1}/{checkpoints.length}</span>
-            <Maximize2 className="w-3 h-3 ml-0.5" />
+          {isAllCheckpointsCleared && onMoveToNextCourse && (
+            <button
+              onClick={onMoveToNextCourse}
+              className="px-2 py-0.5 rounded-full bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-black text-[10px] uppercase tracking-wider flex items-center gap-1 shadow-md"
+            >
+              <span>Next Course</span>
+              <ChevronRight className="w-3 h-3" />
+            </button>
+          )}
+          <div className="flex items-center gap-1">
+            <button
+              onClick={() => setIsMinimized(false)}
+              className="p-1 rounded-full text-cyan-400 hover:text-cyan-200 hover:bg-cyan-950/80 transition-colors"
+              title="Expand Details"
+            >
+              <Maximize2 className="w-3 h-3" />
+            </button>
+            {onClose && (
+              <button
+                onClick={onClose}
+                className="p-1 rounded-full text-slate-400 hover:text-red-400 hover:bg-red-950/80 transition-colors"
+                title="Hide Car Waypoint (Can reopen from Top-Left Course HUD)"
+              >
+                <X className="w-3 h-3" />
+              </button>
+            )}
           </div>
         </div>
       ) : (
         /* EXPANDED INTERACTIVE CAR-TOP SLIDESHOW CARD */
-        <div className="w-full bg-slate-950/92 backdrop-blur-xl border border-cyan-500/40 rounded-2xl p-3 sm:p-3.5 shadow-2xl shadow-cyan-950/50 text-white flex flex-col gap-2">
+        <div className={`w-full backdrop-blur-xl border rounded-2xl p-3 sm:p-3.5 shadow-2xl text-white flex flex-col gap-2 ${
+          isAllCheckpointsCleared
+            ? 'bg-slate-950/95 border-emerald-500/80 shadow-emerald-950/60'
+            : 'bg-slate-950/92 border-cyan-500/40 shadow-cyan-950/50'
+        }`}>
           {/* Top Slide Pagination Header */}
           <div className="flex items-center justify-between border-b border-slate-800/80 pb-2">
             {/* Prev / Next Slide Nav */}
@@ -208,54 +255,111 @@ export const CarTopGuideSlideshow: React.FC<CarTopGuideSlideshowProps> = ({
                 id="minimize-car-guide-btn"
                 onClick={() => setIsMinimized(true)}
                 className="p-1 rounded-lg text-slate-400 hover:text-white hover:bg-slate-850 transition-colors ml-1"
-                title="Minimize Guide (Hover Pill)"
+                title="Minimize to Waypoint Pill"
               >
                 <Minimize2 className="w-3.5 h-3.5" />
               </button>
+              {onClose && (
+                <button
+                  id="close-car-guide-btn"
+                  onClick={onClose}
+                  className="p-1 rounded-lg text-slate-400 hover:text-red-400 hover:bg-slate-850 transition-colors"
+                  title="Hide Car-Top Guide"
+                >
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              )}
             </div>
           </div>
 
-          {/* Slide Directive Body: "What to do right now" */}
-          <div className="flex flex-col gap-1.5">
-            <div className="flex items-baseline justify-between gap-2">
-              <h4 className="text-xs sm:text-sm font-bold text-white tracking-tight flex items-center gap-1.5">
-                <span className="text-cyan-400 font-mono font-black">#{slide.id}</span>
-                <span>{slide.title}</span>
-              </h4>
-
-              {/* Target Distance Badge */}
-              <div className="flex items-center gap-1 px-2 py-0.5 rounded-md bg-slate-900 border border-slate-800 font-mono text-[11px] text-cyan-300 font-bold shrink-0">
-                <Navigation className="w-3 h-3 text-cyan-400" />
-                <span>{distanceMeters}m</span>
+          {/* ALL CHECKPOINTS CLEARED PROMINENT CALL TO ACTION */}
+          {isAllCheckpointsCleared ? (
+            <div className="p-3 bg-gradient-to-r from-emerald-950/90 to-teal-950/90 border border-emerald-500/60 rounded-xl flex flex-col gap-2 animate-in zoom-in-95 duration-200">
+              <div className="flex items-start justify-between gap-2">
+                <div className="flex items-center gap-2">
+                  <Sparkles className="w-5 h-5 text-amber-300 shrink-0" />
+                  <div>
+                    <h4 className="text-xs sm:text-sm font-black text-white uppercase tracking-wide">
+                      All 9 Checkpoints Cleared — Course Complete!
+                    </h4>
+                    <p className="text-[11px] text-emerald-300 font-medium">
+                      {autoAdvanceCountdown !== undefined && autoAdvanceCountdown !== null
+                        ? `Auto-advancing to ${nextCourseTitle || 'Next Course'} in ${autoAdvanceCountdown}s...`
+                        : 'Great driving! Ready to advance to the next curriculum course.'}
+                    </p>
+                  </div>
+                </div>
+                <span className="text-[10px] font-mono font-black text-emerald-300 bg-emerald-900/60 px-2 py-0.5 rounded border border-emerald-500/40 shrink-0">
+                  9/9 Done
+                </span>
               </div>
-            </div>
 
-            {/* Clear, Unambiguous Instruction */}
-            <p className="text-xs text-slate-300 leading-relaxed bg-slate-900/60 p-2 rounded-xl border border-slate-800/80">
-              {slide.shortDesc}
-            </p>
-
-            {/* Recommended Action & Shortcut Keys */}
-            <div className="flex flex-wrap items-center justify-between gap-1.5 pt-0.5">
-              <div className="flex items-center gap-1 flex-wrap">
-                <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Do This:</span>
-                {slide.keyInstructions.map((inst, kIdx) => (
-                  <kbd
-                    key={kIdx}
-                    className="px-1.5 py-0.5 rounded bg-slate-900 border border-slate-700 text-amber-300 font-mono font-bold text-[10px] shadow-sm"
+              {/* Direct Action Buttons to Move Next */}
+              <div className="flex items-center gap-2 pt-1">
+                {onMoveToNextCourse && (
+                  <button
+                    id="guide-move-next-course-btn"
+                    onClick={onMoveToNextCourse}
+                    className="flex-1 py-2 px-3 rounded-xl bg-blue-600 hover:bg-blue-500 text-white font-black text-xs uppercase tracking-wider flex items-center justify-center gap-1.5 shadow-lg shadow-blue-600/40 animate-pulse transition-all"
                   >
-                    {inst}
-                  </kbd>
-                ))}
-              </div>
-
-              {/* Direction compass hint */}
-              <div className="text-[10px] font-mono text-cyan-400 font-semibold flex items-center gap-1">
-                <span>Direct:</span>
-                <span className="text-white font-bold">{getDirectionHint()}</span>
+                    <span>Move to Next Course</span>
+                    <ArrowRight className="w-3.5 h-3.5" />
+                  </button>
+                )}
+                {onOpenTestResult && (
+                  <button
+                    id="guide-view-cert-btn"
+                    onClick={onOpenTestResult}
+                    className="py-2 px-3 rounded-xl bg-emerald-700 hover:bg-emerald-600 text-white font-bold text-xs uppercase tracking-wider flex items-center justify-center gap-1 shadow-md transition-all"
+                  >
+                    <span>Certificate</span>
+                  </button>
+                )}
               </div>
             </div>
-          </div>
+          ) : (
+            /* Slide Directive Body: "What to do right now" */
+            <div className="flex flex-col gap-1.5">
+              <div className="flex items-baseline justify-between gap-2">
+                <h4 className="text-xs sm:text-sm font-bold text-white tracking-tight flex items-center gap-1.5">
+                  <span className="text-cyan-400 font-mono font-black">#{slide.id}</span>
+                  <span>{slide.title}</span>
+                </h4>
+
+                {/* Target Distance Badge */}
+                <div className="flex items-center gap-1 px-2 py-0.5 rounded-md bg-slate-900 border border-slate-800 font-mono text-[11px] text-cyan-300 font-bold shrink-0">
+                  <Navigation className="w-3 h-3 text-cyan-400" />
+                  <span>{distanceMeters}m</span>
+                </div>
+              </div>
+
+              {/* Clear, Unambiguous Instruction */}
+              <p className="text-xs text-slate-300 leading-relaxed bg-slate-900/60 p-2 rounded-xl border border-slate-800/80">
+                {slide.shortDesc}
+              </p>
+
+              {/* Recommended Action & Shortcut Keys */}
+              <div className="flex flex-wrap items-center justify-between gap-1.5 pt-0.5">
+                <div className="flex items-center gap-1 flex-wrap">
+                  <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Do This:</span>
+                  {slide.keyInstructions.map((inst, kIdx) => (
+                    <kbd
+                      key={kIdx}
+                      className="px-1.5 py-0.5 rounded bg-slate-900 border border-slate-700 text-amber-300 font-mono font-bold text-[10px] shadow-sm"
+                    >
+                      {inst}
+                    </kbd>
+                  ))}
+                </div>
+
+                {/* Direction compass hint */}
+                <div className="text-[10px] font-mono text-cyan-400 font-semibold flex items-center gap-1">
+                  <span>Direct:</span>
+                  <span className="text-white font-bold">{getDirectionHint()}</span>
+                </div>
+              </div>
+            </div>
+          )}
 
           {/* Bottom Checkpoint Breadcrumbs Ribbon */}
           <div className="flex items-center justify-between pt-1 border-t border-slate-800/60 text-[9px] font-mono text-slate-400">

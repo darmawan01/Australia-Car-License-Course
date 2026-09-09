@@ -1,6 +1,5 @@
 import React, { useEffect } from 'react';
-import { CurriculumSeason, GuideStepItem } from '../data/curriculumSeasons';
-import { VehicleState } from '../types';
+import { CurriculumSeason, GuideStepItem, VehicleState } from '../types';
 import { soundManager } from '../utils/audio';
 import {
   CheckCircle2,

@@ -206,3 +206,46 @@ export interface CarScreenPos {
   y: number;
   isVisible: boolean;
 }
+
+export interface TheoryItem {
+  ruleCode: string;
+  ruleTitle: string;
+  description: string;
+  practicalImpact: string;
+  criticalFailCondition: string;
+}
+
+export type StepCheckType =
+  | 'gear_d'
+  | 'handbrake_off'
+  | 'handbrake_on'
+  | 'indicator_right'
+  | 'indicator_left'
+  | 'indicator_hazard'
+  | 'speed_moving'
+  | 'speed_stop'
+  | 'headlight_low'
+  | 'headlight_high'
+  | 'headlight_dim'
+  | 'look_behind';
+
+export interface GuideStepItem {
+  stepNumber: number;
+  title: string;
+  instruction: string;
+  keyPrompt: string;
+  explanation: string;
+  checkType: StepCheckType;
+}
+
+export interface CurriculumSeason {
+  id: number;
+  badge: string;
+  title: string;
+  subtitle: string;
+  category: string;
+  readTime: string;
+  summary: string;
+  theory: TheoryItem[];
+  steps: GuideStepItem[];
+}

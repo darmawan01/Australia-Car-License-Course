@@ -471,6 +471,21 @@ export const ThreeCanvas: React.FC<ThreeCanvasProps> = ({
       worldGroup.add(line);
     }
 
+    // Australian Retroreflective Cat's Eyes / Raised Pavement Markers (RPMs) along centerline
+    const catEyeMat = new THREE.MeshStandardMaterial({
+      color: isNightMode ? 0xffffff : 0xcccccc,
+      emissive: isNightMode ? 0xfff0b0 : 0x000000,
+      emissiveIntensity: isNightMode ? 1.6 : 0.0,
+      roughness: 0.2
+    });
+    for (let z = 20; z >= -460; z -= 14) {
+      if (z > -155 && z < -125) continue; // Skip roundabout
+      if (z > -280 && z < -260) continue; // Skip crossroads
+      const stud = new THREE.Mesh(new THREE.BoxGeometry(0.14, 0.04, 0.14), catEyeMat);
+      stud.position.set(0, 0.035, z);
+      worldGroup.add(stud);
+    }
+
     // 2. School Zone 40 Markings & Double Continuous Lines: z = -50 to -115
     // Double solid white line prevents overtaking near school zone
     const doubleLineGeo = new THREE.PlaneGeometry(0.15, 65);
@@ -1148,27 +1163,109 @@ export const ThreeCanvas: React.FC<ThreeCanvasProps> = ({
       });
     }
 
-    // Streetlights
-    for (let z = 20; z >= -420; z -= 45) {
+    // ==========================================
+    // 8. REALISTIC AUSTRALIAN STREET LIGHTS & ROAD LIGHTING NETWORK
+    // ==========================================
+    const poleMat = new THREE.MeshStandardMaterial({ color: 0x475569, metalness: 0.75, roughness: 0.35 });
+    const lampHousingMat = new THREE.MeshStandardMaterial({ color: 0x1e293b, roughness: 0.6 });
+    const streetBulbMat = new THREE.MeshStandardMaterial({
+      color: isNightMode ? 0xfff3c4 : 0xd1d5db,
+      emissive: isNightMode ? 0xffe070 : 0x000000,
+      emissiveIntensity: isNightMode ? 4.2 : 0.0,
+      roughness: 0.1
+    });
+
+    const createStreetLight = (x: number, z: number, facingRight: boolean) => {
       const lampGroup = new THREE.Group();
-      const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.09, 0.12, 7, 12), new THREE.MeshStandardMaterial({ color: 0x64748b, metalness: 0.8 }));
-      pole.position.y = 3.5;
+      // Main Vertical Pole (7.8m height)
+      const pole = new THREE.Mesh(new THREE.CylinderGeometry(0.09, 0.15, 7.8, 12), poleMat);
+      pole.position.y = 3.9;
       pole.castShadow = true;
       lampGroup.add(pole);
 
-      const arm = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.06, 2.5, 8), new THREE.MeshStandardMaterial({ color: 0x64748b }));
-      arm.rotation.z = Math.PI / 3;
-      arm.position.set(1.0, 7.2, 0);
+      // Curved Overhang Outreach Arm arching toward road center
+      const armDir = facingRight ? 1 : -1;
+      const arm = new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.07, 2.7, 8), poleMat);
+      arm.position.set(armDir * 1.15, 7.9, 0);
+      arm.rotation.z = -armDir * (Math.PI / 3.4);
       lampGroup.add(arm);
 
+      // Streetlamp Luminaire Head (Cobra-head housing)
+      const head = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.16, 0.95), lampHousingMat);
+      head.position.set(armDir * 2.3, 8.25, 0);
+      lampGroup.add(head);
+
+      // Glowing Lamp Lens / Bulb facing downward
+      const bulb = new THREE.Mesh(new THREE.BoxGeometry(0.4, 0.08, 0.8), streetBulbMat);
+      bulb.position.set(armDir * 2.3, 8.16, 0);
+      lampGroup.add(bulb);
+
       if (isNightMode) {
-        const light = new THREE.PointLight(0xfff3b0, 1.8, 30);
-        light.position.set(2.0, 7.5, 0);
+        // Targeted Road Light Source illuminating the road
+        const light = new THREE.PointLight(0xfff1b8, 2.6, 38, 1.3);
+        light.position.set(armDir * 2.3, 8.1, 0);
         lampGroup.add(light);
+
+        // Illuminated Road Light Pool on the Asphalt surface
+        const roadPool = new THREE.Mesh(
+          new THREE.PlaneGeometry(9.0, 16.0),
+          new THREE.MeshBasicMaterial({
+            color: 0xffe680,
+            transparent: true,
+            opacity: 0.18,
+            depthWrite: false,
+            blending: THREE.AdditiveBlending
+          })
+        );
+        roadPool.rotation.x = -Math.PI / 2;
+        // Position directly over the driving lane under the lamp
+        roadPool.position.set(armDir * 2.8, 0.035, 0);
+        lampGroup.add(roadPool);
+
+        // Atmospheric downward light cone from lamp down to road
+        const coneHeight = 8.1;
+        const beamCone = new THREE.Mesh(
+          new THREE.ConeGeometry(3.6, coneHeight, 16, 1, true),
+          new THREE.MeshBasicMaterial({
+            color: 0xfff0a0,
+            transparent: true,
+            opacity: 0.045,
+            depthWrite: false,
+            side: THREE.DoubleSide
+          })
+        );
+        beamCone.position.set(armDir * 2.3, coneHeight / 2, 0);
+        lampGroup.add(beamCone);
       }
 
-      lampGroup.position.set(-ROAD_WIDTH / 2 - 2, 0, z);
+      lampGroup.position.set(x, 0, z);
       worldGroup.add(lampGroup);
+    };
+
+    // Staggered Road Lights along both sides of main road (z = 35 down to -460, alternating left & right every 22m)
+    let isLeft = true;
+    for (let z = 35; z >= -460; z -= 22) {
+      // Don't place inside the roundabout core (z = -128 to -152)
+      if (z > -152 && z < -128) continue;
+      // Don't place inside the city crossroads (z = -262 to -278)
+      if (z > -278 && z < -262) continue;
+
+      const sideX = isLeft ? (-ROAD_WIDTH / 2 - 1.8) : (ROAD_WIDTH / 2 + 1.8);
+      createStreetLight(sideX, z, isLeft);
+      isLeft = !isLeft;
+    }
+
+    // Dedicated High-Mast Lights around the Roundabout (z = -140)
+    createStreetLight(-15.5, -140, true);
+    createStreetLight(15.5, -140, false);
+    createStreetLight(-ROAD_WIDTH / 2 - 1.8, -125, true);
+    createStreetLight(ROAD_WIDTH / 2 + 1.8, -155, false);
+
+    // Streetlights along City Cross Branch Street at z = -270
+    for (let x = -80; x <= 80; x += 32) {
+      if (Math.abs(x) > 7) {
+        createStreetLight(x, -270 - ROAD_WIDTH / 2 - 1.8, true);
+      }
     }
 
     // ==========================================
@@ -1561,6 +1658,19 @@ export const ThreeCanvas: React.FC<ThreeCanvasProps> = ({
     carGroup.add(headSpotR);
     carGroup.add(headSpotR.target);
 
+    // Projected Headlight Road Light Pool (brightens the asphalt directly ahead of the vehicle in night vision)
+    const roadPoolMat = new THREE.MeshBasicMaterial({
+      color: 0xfffae0,
+      transparent: true,
+      opacity: isNightMode ? 0.28 : 0.0,
+      depthWrite: false,
+      blending: THREE.AdditiveBlending
+    });
+    const headlightRoadPool = new THREE.Mesh(new THREE.PlaneGeometry(6.5, 24), roadPoolMat);
+    headlightRoadPool.rotation.x = -Math.PI / 2;
+    headlightRoadPool.position.set(0, 0.04, -14);
+    carGroup.add(headlightRoadPool);
+
     // Rear Taillights (Glow red when brake applied)
     const tailMat = new THREE.MeshStandardMaterial({
       color: 0x990000,
@@ -1696,29 +1806,34 @@ export const ThreeCanvas: React.FC<ThreeCanvasProps> = ({
       let spotIntensity = 0;
       let spotDistance = 60;
       let spotAngle = Math.PI / 6;
+      let roadPoolOpacity = 0;
       if (cur.headlightMode === 'high' || cur.highBeams) {
         spotIntensity = 8.0;
         spotDistance = 90;
         spotAngle = Math.PI / 5;
         headLightMat.emissive.setHex(0xffffff);
         headLightMat.emissiveIntensity = 3.2;
+        roadPoolOpacity = 0.38;
       } else if (cur.headlightMode === 'low' || (cur.headlights && cur.headlightMode !== 'dim')) {
         spotIntensity = 4.8;
         spotDistance = 58;
         spotAngle = Math.PI / 6;
         headLightMat.emissive.setHex(0xffffff);
         headLightMat.emissiveIntensity = 1.8;
+        roadPoolOpacity = 0.28;
       } else if (cur.headlightMode === 'dim') {
         spotIntensity = 1.2;
         spotDistance = 22;
         spotAngle = Math.PI / 7;
         headLightMat.emissive.setHex(0xffdfaa);
         headLightMat.emissiveIntensity = 0.8;
+        roadPoolOpacity = 0.14;
       } else {
         spotIntensity = isNightMode ? 2.5 : 0;
         spotDistance = 45;
         headLightMat.emissive.setHex(isNightMode ? 0xffffff : 0x222222);
         headLightMat.emissiveIntensity = isNightMode ? 0.6 : 0.1;
+        roadPoolOpacity = isNightMode ? 0.22 : 0;
       }
       headSpotL.intensity = spotIntensity;
       headSpotR.intensity = spotIntensity;
@@ -1726,6 +1841,7 @@ export const ThreeCanvas: React.FC<ThreeCanvasProps> = ({
       headSpotR.distance = spotDistance;
       headSpotL.angle = spotAngle;
       headSpotR.angle = spotAngle;
+      roadPoolMat.opacity = roadPoolOpacity;
 
       // 2. Realistic Driving Vehicle Physics
       const ACCELERATION_RATE = 28; // km/h per second

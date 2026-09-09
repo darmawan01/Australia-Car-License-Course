@@ -9,13 +9,15 @@ interface TestResultModalProps {
   onRetake: () => void;
   onUpgradeLicense: () => void;
   onClose: () => void;
+  onNextCourse?: () => void;
 }
 
 export const TestResultModal: React.FC<TestResultModalProps> = ({
   result,
   onRetake,
   onUpgradeLicense,
-  onClose
+  onClose,
+  onNextCourse
 }) => {
   useEffect(() => {
     if (result) {
@@ -113,25 +115,40 @@ export const TestResultModal: React.FC<TestResultModalProps> = ({
           )}
 
           {/* Action Buttons */}
-          <div className="pt-2 flex items-center gap-3">
+          <div className="pt-2 flex flex-col sm:flex-row items-stretch sm:items-center gap-2 sm:gap-3">
             <button
               id="retake-test-btn"
               onClick={onRetake}
-              className="flex-1 py-3 rounded-xl bg-slate-800 hover:bg-slate-700 text-white font-bold text-xs uppercase tracking-wider transition-colors flex items-center justify-center gap-2"
+              className="py-3 px-4 rounded-xl bg-slate-800 hover:bg-slate-700 text-white font-bold text-xs uppercase tracking-wider transition-colors flex items-center justify-center gap-2 shrink-0"
             >
               <RotateCcw className="w-4 h-4" />
-              <span>Retake Test</span>
+              <span>Retry Course</span>
             </button>
 
             {result.passed ? (
-              <button
-                id="upgrade-license-btn"
-                onClick={onUpgradeLicense}
-                className="flex-1 py-3 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs uppercase tracking-wider transition-colors flex items-center justify-center gap-2 shadow-lg shadow-emerald-600/30"
-              >
-                <Award className="w-4 h-4" />
-                <span>Claim Red P-Plate</span>
-              </button>
+              <>
+                {onNextCourse && (
+                  <button
+                    id="next-course-modal-btn"
+                    onClick={() => {
+                      onClose();
+                      onNextCourse();
+                    }}
+                    className="flex-1 py-3 px-4 rounded-xl bg-blue-600 hover:bg-blue-500 text-white font-black text-xs uppercase tracking-wider transition-all flex items-center justify-center gap-2 shadow-lg shadow-blue-600/30 animate-pulse"
+                  >
+                    <span>Move to Next Course</span>
+                    <ArrowRight className="w-4 h-4" />
+                  </button>
+                )}
+                <button
+                  id="upgrade-license-btn"
+                  onClick={onUpgradeLicense}
+                  className="flex-1 py-3 px-4 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs uppercase tracking-wider transition-colors flex items-center justify-center gap-2 shadow-lg shadow-emerald-600/30"
+                >
+                  <Award className="w-4 h-4" />
+                  <span>Claim Red P-Plate</span>
+                </button>
+              </>
             ) : (
               <button
                 id="close-result-btn"
