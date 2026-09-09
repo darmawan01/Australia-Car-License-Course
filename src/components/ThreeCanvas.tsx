@@ -26,6 +26,7 @@ interface ThreeCanvasProps {
   onCheckpointPassed?: (checkpointId: number, title: string) => void;
   onCarScreenPosUpdate?: (pos: { x: number; y: number; isVisible: boolean }) => void;
   onLaneDisciplineAlert?: (alert: { type: string; message: string; ruleRef: string }) => void;
+  resetSignal?: number;
 }
 
 export const ThreeCanvas: React.FC<ThreeCanvasProps> = ({
@@ -48,11 +49,91 @@ export const ThreeCanvas: React.FC<ThreeCanvasProps> = ({
   completedCheckpointIds = [],
   onCheckpointPassed,
   onCarScreenPosUpdate,
-  onLaneDisciplineAlert
+  onLaneDisciplineAlert,
+  resetSignal
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
-  const stateRef = useRef(vehicleState);
-  stateRef.current = vehicleState;
+
+  // Dedicated continuous physics simulation state (never clobbered by asynchronous React re-renders)
+  const physicsRef = useRef({
+    x: vehicleState.x,
+    z: vehicleState.z,
+    rotation: vehicleState.rotation,
+    speed: vehicleState.speed,
+    rpm: vehicleState.rpm,
+    steering: vehicleState.steering,
+    throttle: vehicleState.throttle,
+    brake: vehicleState.brake,
+    gear: vehicleState.gear,
+    handbrake: vehicleState.handbrake,
+    leftIndicator: vehicleState.leftIndicator,
+    rightIndicator: vehicleState.rightIndicator,
+    hazardLights: vehicleState.hazardLights,
+    headlights: vehicleState.headlights,
+    highBeams: vehicleState.highBeams,
+    headlightMode: vehicleState.headlightMode,
+    engineRunning: vehicleState.engineRunning,
+    currentLane: vehicleState.currentLane,
+    isColliding: vehicleState.isColliding,
+    indicatorsBlinkState: vehicleState.indicatorsBlinkState
+  });
+
+  const lastResetSignalRef = useRef<number | undefined>(resetSignal);
+  const cameraSnapNeededRef = useRef<boolean>(true);
+  const triggeredCheckpointsRef = useRef<Set<number>>(new Set(completedCheckpointIds));
+  const lastStateSyncTimeRef = useRef<number>(0);
+
+  // Synchronize triggered checkpoints when completed list changes
+  useEffect(() => {
+    triggeredCheckpointsRef.current = new Set(completedCheckpointIds);
+  }, [completedCheckpointIds]);
+
+  // Handle explicit teleport/level reset signal
+  useEffect(() => {
+    if (resetSignal !== undefined && resetSignal !== lastResetSignalRef.current) {
+      lastResetSignalRef.current = resetSignal;
+      physicsRef.current.x = vehicleState.x;
+      physicsRef.current.z = vehicleState.z;
+      physicsRef.current.rotation = vehicleState.rotation;
+      physicsRef.current.speed = vehicleState.speed;
+      physicsRef.current.gear = vehicleState.gear;
+      physicsRef.current.handbrake = vehicleState.handbrake;
+      physicsRef.current.throttle = 0;
+      physicsRef.current.brake = 0;
+      physicsRef.current.steering = 0;
+      cameraSnapNeededRef.current = true;
+      triggeredCheckpointsRef.current = new Set(completedCheckpointIds);
+    }
+  }, [resetSignal, vehicleState.x, vehicleState.z, vehicleState.rotation, vehicleState.speed, vehicleState.gear, vehicleState.handbrake, completedCheckpointIds]);
+
+  // Seamlessly update driver control inputs without touching running physics position
+  useEffect(() => {
+    physicsRef.current.steering = vehicleState.steering;
+    physicsRef.current.throttle = vehicleState.throttle;
+    physicsRef.current.brake = vehicleState.brake;
+    physicsRef.current.gear = vehicleState.gear;
+    physicsRef.current.handbrake = vehicleState.handbrake;
+    physicsRef.current.leftIndicator = vehicleState.leftIndicator;
+    physicsRef.current.rightIndicator = vehicleState.rightIndicator;
+    physicsRef.current.hazardLights = vehicleState.hazardLights;
+    physicsRef.current.headlights = vehicleState.headlights;
+    physicsRef.current.highBeams = vehicleState.highBeams;
+    physicsRef.current.headlightMode = vehicleState.headlightMode;
+    physicsRef.current.engineRunning = vehicleState.engineRunning;
+  }, [
+    vehicleState.steering,
+    vehicleState.throttle,
+    vehicleState.brake,
+    vehicleState.gear,
+    vehicleState.handbrake,
+    vehicleState.leftIndicator,
+    vehicleState.rightIndicator,
+    vehicleState.hazardLights,
+    vehicleState.headlights,
+    vehicleState.highBeams,
+    vehicleState.headlightMode,
+    vehicleState.engineRunning
+  ]);
 
   const isLookingBehindRef = useRef(isLookingBehind);
   isLookingBehindRef.current = isLookingBehind;
@@ -101,7 +182,7 @@ export const ThreeCanvas: React.FC<ThreeCanvasProps> = ({
     const trafficManager = new AITrafficManager(scene);
     trafficManagerRef.current = trafficManager;
     if (activeHazardRef.current !== 'none') {
-      trafficManager.triggerHazard(activeHazardRef.current, stateRef.current.z);
+      trafficManager.triggerHazard(activeHazardRef.current, physicsRef.current.z);
     }
 
     const camera = new THREE.PerspectiveCamera(60, width / height, 0.1, 1000);
@@ -1756,8 +1837,8 @@ export const ThreeCanvas: React.FC<ThreeCanvasProps> = ({
     carGroup.add(rearRightWheel);
 
     // Initial Car Placement: Parked on the left side of the Australian road (x = -2.5, z = 10) facing forward (-Z)
-    carGroup.position.set(stateRef.current.x, 0, stateRef.current.z);
-    carGroup.rotation.y = stateRef.current.rotation;
+    carGroup.position.set(physicsRef.current.x, 0, physicsRef.current.z);
+    carGroup.rotation.y = physicsRef.current.rotation;
 
     // --- Blinkers & Pedestrian Animation Clock ---
     let lastTime = performance.now();
@@ -1773,7 +1854,7 @@ export const ThreeCanvas: React.FC<ThreeCanvasProps> = ({
       const delta = Math.min((time - lastTime) / 1000, 0.1);
       lastTime = time;
 
-      const cur = { ...stateRef.current };
+      const cur = { ...physicsRef.current };
 
       // 1. Indicator blinker clock (1.5 Hz frequency)
       blinkAccumulator += delta;
@@ -2056,7 +2137,22 @@ export const ThreeCanvas: React.FC<ThreeCanvasProps> = ({
         ? 'offroad'
         : x < 0 ? 'left' : 'right';
 
+      // Update running physics simulation position
+      physicsRef.current.x = x;
+      physicsRef.current.z = z;
+      physicsRef.current.rotation = rotation;
+      physicsRef.current.speed = speedKmh;
+      physicsRef.current.rpm = rpm;
+      physicsRef.current.currentLane = currentLane;
+      physicsRef.current.isColliding = isOffroad;
+      physicsRef.current.indicatorsBlinkState = blinkState;
+
       // 5. Camera Management - Focused on the vehicle
+      const shouldSnapCamera = cameraSnapNeededRef.current;
+      if (shouldSnapCamera) {
+        cameraSnapNeededRef.current = false;
+      }
+
       if (isLookingBehindRef.current) {
         // Look Behind Camera: view facing backward
         if (cameraView === 'cockpit') {
@@ -2070,7 +2166,11 @@ export const ThreeCanvas: React.FC<ThreeCanvasProps> = ({
           const cameraHeight = 2.6;
           const camX = x - Math.sin(rotation) * cameraDist;
           const camZ = z - Math.cos(rotation) * cameraDist;
-          camera.position.lerp(new THREE.Vector3(camX, cameraHeight, camZ), 0.25);
+          if (shouldSnapCamera) {
+            camera.position.set(camX, cameraHeight, camZ);
+          } else {
+            camera.position.lerp(new THREE.Vector3(camX, cameraHeight, camZ), 0.25);
+          }
           camera.lookAt(x, 1.35, z + Math.cos(rotation) * 2.5);
         }
       } else if (cameraView === 'chase') {
@@ -2080,7 +2180,11 @@ export const ThreeCanvas: React.FC<ThreeCanvasProps> = ({
         const camX = x + Math.sin(rotation) * cameraDist;
         const camZ = z + Math.cos(rotation) * cameraDist;
 
-        camera.position.lerp(new THREE.Vector3(camX, cameraHeight, camZ), 0.18);
+        if (shouldSnapCamera) {
+          camera.position.set(camX, cameraHeight, camZ);
+        } else {
+          camera.position.lerp(new THREE.Vector3(camX, cameraHeight, camZ), 0.18);
+        }
         camera.lookAt(x, 1.35, z - Math.cos(rotation) * 2.5);
       } else if (cameraView === 'cockpit') {
         // Driver seat view: RIGHT-HAND DRIVE (x = 0.4, y = 1.35, z = 0.05)
@@ -2130,8 +2234,11 @@ export const ThreeCanvas: React.FC<ThreeCanvasProps> = ({
 
           // Check if car reached this active checkpoint
           const distToCP = Math.hypot(x - cpObj.targetX, z - cpObj.targetZ);
-          if (distToCP <= cpObj.radius && !cpObj.passed) {
-            cpObj.passed = true;
+          const inRange = distToCP <= Math.max(cpObj.radius, 7.5) || (Math.abs(z - cpObj.targetZ) <= 4.0 && Math.abs(x - cpObj.targetX) <= 6.5);
+          const isAlreadyTriggered = completedList.includes(cpObj.id) || triggeredCheckpointsRef.current.has(cpObj.id);
+
+          if (inRange && !isAlreadyTriggered) {
+            triggeredCheckpointsRef.current.add(cpObj.id);
             soundManager.playLevelPass();
             if (onCheckpointPassedRef.current) {
               onCheckpointPassedRef.current(cpObj.id, ROAD_CHECKPOINTS[idx]?.title || '');
@@ -2194,13 +2301,10 @@ export const ThreeCanvas: React.FC<ThreeCanvasProps> = ({
         }
       }
 
-      // Update React vehicle state if values changed meaningfully
-      if (
-        Math.abs(cur.speed - speedKmh) > 0.1 ||
-        cur.currentLane !== currentLane ||
-        cur.isColliding !== isOffroad ||
-        cur.indicatorsBlinkState !== blinkState
-      ) {
+      // Throttled sync to React state so Dashboard speedometer & controls are silky smooth without re-render thrashing
+      const now = performance.now();
+      if (now - lastStateSyncTimeRef.current > 40) {
+        lastStateSyncTimeRef.current = now;
         setVehicleState(prev => ({
           ...prev,
           x,
@@ -2249,7 +2353,7 @@ export const ThreeCanvas: React.FC<ThreeCanvasProps> = ({
   useEffect(() => {
     if (trafficManagerRef.current) {
       if (activeHazard !== 'none') {
-        trafficManagerRef.current.triggerHazard(activeHazard, stateRef.current.z);
+        trafficManagerRef.current.triggerHazard(activeHazard, physicsRef.current.z);
       } else {
         trafficManagerRef.current.clearHazard();
       }

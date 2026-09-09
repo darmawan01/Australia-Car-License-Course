@@ -138,6 +138,7 @@ export default function App() {
   const [checkpointNotice, setCheckpointNotice] = useState<{ show: boolean; text: string; sub: string } | null>(null);
   const [laneAlert, setLaneAlert] = useState<{ type: string; message: string; ruleRef: string } | null>(null);
   const [showCarGuide, setShowCarGuide] = useState<boolean>(true);
+  const [resetSignal, setResetSignal] = useState<number>(0);
   const [autoAdvance, setAutoAdvance] = useState<{
     nextLevel: DrivingLevel;
     countdown: number;
@@ -471,7 +472,7 @@ export default function App() {
   }, [currentMode, triggerFail]);
 
   // Complete a level with stars calculation and auto-advance queue
-  const completeLevel = useCallback((levelId: number, targetNextLevelId?: number) => {
+  const completeLevel = useCallback((levelId: number, targetNextLevelId?: number, isContinuousDrive: boolean = false) => {
     setIsLevelPassed(true);
     soundManager.playSuccessChime();
 
@@ -521,9 +522,19 @@ export default function App() {
         completedAt: new Date().toLocaleTimeString(),
         state: 'NSW'
       });
+      setAutoAdvance(null);
+      return;
     }
 
-    if (nextLevelObj) {
+    // In continuous drive mode along the road course (Levels 1-5), seamlessly transition
+    // current level without any teleportation or physics reset!
+    if (isContinuousDrive && nextLevelObj && nextLevelObj.id <= 5) {
+      setCurrentLevelId(nextLevelObj.id);
+      setAutoAdvance(null);
+      return;
+    }
+
+    if (nextLevelObj && !isContinuousDrive) {
       const currentLevelObj = DRIVING_LEVELS.find(l => l.id === levelId);
       setAutoAdvance({
         nextLevel: nextLevelObj,
@@ -566,13 +577,13 @@ export default function App() {
       completedCourseLevelId = 4;
       nextCourseLevelId = 5;
     } else if (checkpointId === 9 || checkpointId === 10 || updatedCompleted.length >= ROAD_CHECKPOINTS.length) {
-      // Checkpoint 9/10 (Finish Line) completes Course 5! Auto-advances to Level 6: Practice 1
+      // Checkpoint 9/10 (Finish Line) completes Course 5!
       completedCourseLevelId = 5;
       nextCourseLevelId = 6;
     }
 
     if (completedCourseLevelId) {
-      completeLevel(completedCourseLevelId, nextCourseLevelId || undefined);
+      completeLevel(completedCourseLevelId, nextCourseLevelId || undefined, true);
     }
 
     const isAllDone = checkpointId >= 9 || updatedCompleted.length >= ROAD_CHECKPOINTS.length;
@@ -584,7 +595,7 @@ export default function App() {
       : `CHECKPOINT ${checkpointId} CLEARED!`;
 
     const bannerSub = isAllDone
-      ? 'All checkpoints cleared! Auto-moving to Next Course (Practice Drills)...'
+      ? 'All checkpoints cleared! Superb driving! Test scorecard ready.'
       : `${title} • ${nextLevelObj ? nextLevelObj.title : 'Waypoint cleared!'}`;
 
     setCheckpointNotice({
@@ -666,7 +677,7 @@ export default function App() {
     if (stoppedProperly) {
       soundManager.playSuccessChime();
       if (currentLevel.id === 3 || currentLevel.id === 8) {
-        completeLevel(currentLevel.id);
+        completeLevel(currentLevel.id, undefined, true);
       }
     } else {
       triggerFail('Failing to Give Way to Pedestrian at Marked Australian Zebra Crossing');
@@ -677,7 +688,7 @@ export default function App() {
     if (heldFullStop) {
       soundManager.playSuccessChime();
       if (currentLevel.id === 4) {
-        completeLevel(currentLevel.id);
+        completeLevel(currentLevel.id, undefined, true);
       }
     } else {
       triggerFail('Rolling Stop at Australian Regulatory STOP Sign (R1-1)');
@@ -688,7 +699,7 @@ export default function App() {
     if (signaledProperly) {
       soundManager.playSuccessChime();
       if (currentLevel.id === 5) {
-        completeLevel(currentLevel.id);
+        completeLevel(currentLevel.id, undefined, true);
       }
     } else {
       addMinorFault('Roundabout Indicator Violation', 'Failed to signal right on entry or left on exit of roundabout.');
@@ -699,7 +710,7 @@ export default function App() {
     if (isSuccess) {
       soundManager.playSuccessChime();
       if (currentLevel.id === 5 || currentLevel.id === 2) {
-        completeLevel(currentLevel.id);
+        completeLevel(currentLevel.id, undefined, true);
       }
     }
   }, [completeLevel, currentLevel.id]);
@@ -749,6 +760,7 @@ export default function App() {
       handbrake: !hasInitialSpeed,
       speed: level.spawnSpeed || 0
     });
+    setResetSignal(prev => prev + 1);
 
     // If level has an initial hazard, trigger it
     if (level.requiredHazardTrigger) {
@@ -828,6 +840,7 @@ export default function App() {
         gear: 'D',
         handbrake: false
       });
+      setResetSignal(prev => prev + 1);
       handleClearHazard();
     } else if (mode === 'test') {
       handleSelectCategory('exam');
@@ -889,6 +902,7 @@ export default function App() {
       <ThreeCanvas
         vehicleState={vehicleState}
         setVehicleState={setVehicleState}
+        resetSignal={resetSignal}
         cameraView={cameraView}
         isLookingBehind={isLookingBehind}
         activeHazard={hazardState.activeHazard}
