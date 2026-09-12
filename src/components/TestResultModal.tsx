@@ -22,14 +22,21 @@ export const TestResultModal: React.FC<TestResultModalProps> = ({
   useEffect(() => {
     if (result) {
       if (result.passed) {
-        soundManager.playSuccessChime();
+        soundManager.playCelebrationFanfare();
+        soundManager.speakAnnouncement(
+          `Congratulations! Driving test passed with a final score of ${result.score} percent. You have earned your Provisional P1 licence.`
+        );
         confetti({
-          particleCount: 80,
-          spread: 70,
-          origin: { y: 0.6 }
+          particleCount: 120,
+          spread: 80,
+          origin: { y: 0.55 }
         });
       } else {
         soundManager.playWarningBuzzer();
+        const reasonMsg = result.criticalFailItem ? `due to ${result.criticalFailItem}` : `with a score of ${result.score} percent`;
+        soundManager.speakAnnouncement(
+          `Assessment incomplete ${reasonMsg}. Review deductions and retry.`
+        );
       }
     }
   }, [result]);

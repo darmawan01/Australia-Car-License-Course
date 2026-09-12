@@ -35,6 +35,18 @@ export type TestMode = 'course' | 'practice' | 'exam' | 'test' | 'hazard_challen
 
 export type LevelCategory = 'course' | 'practice' | 'exam';
 
+export type CourseEnvironment = 'morning_sunrise' | 'midday_clear' | 'school_rush' | 'rainy_wet' | 'dusk_sunset' | 'night_twilight';
+
+export interface DrivingSituation {
+  timeLabel: string;
+  weatherLabel: string;
+  environment: CourseEnvironment;
+  trafficDensity: 'Quiet' | 'Moderate' | 'School Peak' | 'Heavy Commuter' | 'Circulating Flow';
+  roadCondition: 'Dry' | 'Wet Reflective';
+  specialCondition: string;
+  keyRuleAlert: string;
+}
+
 export interface DrivingLevel {
   id: number;
   category: LevelCategory;
@@ -46,6 +58,7 @@ export interface DrivingLevel {
   description: string;
   objectives: string[];
   examinerDirective: string;
+  situation?: DrivingSituation;
   targetZone?: { x: number; z: number; radius: number };
   hazardType?: HazardType;
   requiresStop?: boolean;

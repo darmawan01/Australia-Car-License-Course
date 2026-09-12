@@ -13,7 +13,8 @@ import {
   TestResult,
   TestTask,
   VehicleState,
-  CarScreenPos
+  CarScreenPos,
+  CourseEnvironment
 } from './types';
 import { ROAD_CHECKPOINTS } from './data/checkpointsData';
 import { CarTopGuideSlideshow } from './components/CarTopGuideSlideshow';
@@ -23,6 +24,7 @@ import { DRIVING_LEVELS, INITIAL_LEVEL_PROGRESS } from './data/levelProgression'
 import { ThreeCanvas } from './components/ThreeCanvas';
 import { Dashboard } from './components/Dashboard';
 import { AssessmentHUD } from './components/AssessmentHUD';
+import { CourseSituationCard } from './components/CourseSituationCard';
 import { OnscreenControls } from './components/OnscreenControls';
 import { HeaderNav } from './components/HeaderNav';
 import { LicenseGuide2026 } from './components/LicenseGuide2026';
@@ -34,9 +36,23 @@ import { HazardControlPanel } from './components/HazardControlPanel';
 import { LevelSelectModal } from './components/LevelSelectModal';
 import { ShortcutsModal } from './components/ShortcutsModal';
 import { FloatingShortcutsBar } from './components/FloatingShortcutsBar';
+import { SaveGameModal } from './components/SaveGameModal';
+import { SaveGameService, SavedGameState } from './services/saveGameService';
 import { soundManager } from './utils/audio';
 import confetti from 'canvas-confetti';
 import { AlertCircle, ChevronDown, ChevronUp, Zap } from 'lucide-react';
+
+// Centralized Australian Driving Assessment Scoring Formula
+export const calculateDrivingScore = (
+  faults: TestFault[],
+  hasCriticalFail: boolean = false
+): { score: number; passed: boolean } => {
+  const totalDeductions = faults.reduce((sum, f) => sum + (f.deduction || 4), 0);
+  const criticalPenalty = hasCriticalFail ? 20 : 0;
+  const score = Math.max(0, Math.min(100, Math.round(100 - totalDeductions - criticalPenalty)));
+  const passed = !hasCriticalFail && score >= 85;
+  return { score, passed };
+};
 
 const INITIAL_VEHICLE_STATE: VehicleState = {
   x: -2.25, // Australian Left Lane
@@ -80,6 +96,9 @@ export default function App() {
   const [isShortcutsOpen, setIsShortcutsOpen] = useState<boolean>(false);
   const [showFloatingShortcuts, setShowFloatingShortcuts] = useState<boolean>(false);
   const [isLookingBehind, setIsLookingBehind] = useState<boolean>(false);
+  const [isSaveModalOpen, setIsSaveModalOpen] = useState<boolean>(false);
+  const [environmentOverride, setEnvironmentOverride] = useState<CourseEnvironment | null>(null);
+  const [isSituationCardOpen, setIsSituationCardOpen] = useState<boolean>(false);
 
   // Level Progression State
   const [currentLevelId, setCurrentLevelId] = useState<number>(1);
@@ -97,6 +116,11 @@ export default function App() {
 
   // Current active level object
   const currentLevel = DRIVING_LEVELS.find(l => l.id === currentLevelId) || DRIVING_LEVELS[0];
+
+  // Active environment derived from night mode toggle, user override, or level situation default
+  const activeEnvironment: CourseEnvironment = isNightMode
+    ? 'night_twilight'
+    : (environmentOverride || currentLevel.situation?.environment || 'morning_sunrise');
 
   // Sync level progress to local storage
   useEffect(() => {
@@ -134,6 +158,18 @@ export default function App() {
   // Checkpoints & In-Car Holographic Slideshow
   const [activeCheckpointIndex, setActiveCheckpointIndex] = useState<number>(0);
   const [completedCheckpointIds, setCompletedCheckpointIds] = useState<number[]>([]);
+  const completedCheckpointIdsRef = useRef<number[]>(completedCheckpointIds);
+  completedCheckpointIdsRef.current = completedCheckpointIds;
+
+  const tasksRef = useRef<TestTask[]>(tasks);
+  tasksRef.current = tasks;
+
+  const currentLevelIdRef = useRef<number>(currentLevelId);
+  currentLevelIdRef.current = currentLevelId;
+
+  const overspeedTimerRef = useRef<number>(0);
+  const lastSpeedCheckTimeRef = useRef<number>(Date.now());
+
   const [carScreenPos, setCarScreenPos] = useState<CarScreenPos>({ x: typeof window !== 'undefined' ? window.innerWidth / 2 : 500, y: 320, isVisible: true });
   const [checkpointNotice, setCheckpointNotice] = useState<{ show: boolean; text: string; sub: string } | null>(null);
   const [laneAlert, setLaneAlert] = useState<{ type: string; message: string; ruleRef: string } | null>(null);
@@ -431,6 +467,24 @@ export default function App() {
     }, 5500);
   }, [addMinorFault]);
 
+  // Helper to compute how many official tasks (out of 6) were completed based on checkpoints cleared
+  const computeCompletedTasksCount = useCallback((completedIds: number[]): number => {
+    let count = 0;
+    // Task 1: Cockpit Pre-Drive Check (Departing kerb / Checkpoint 1)
+    if (completedIds.includes(1) || completedIds.includes(2) || completedIds.some(id => id > 1)) count++;
+    // Task 2: School Zone Compliance (Checkpoint 3/4)
+    if (completedIds.includes(3) || completedIds.includes(4) || completedIds.some(id => id > 3)) count++;
+    // Task 3: Pedestrian Zebra Crossing Halt (Checkpoint 4/5)
+    if (completedIds.includes(5) || completedIds.some(id => id > 5)) count++;
+    // Task 4: Compulsory Stop Sign & Solid Line Halt (Checkpoint 7)
+    if (completedIds.includes(7) || completedIds.some(id => id > 7)) count++;
+    // Task 5: Roundabout Left-Turn Navigation (Checkpoint 8)
+    if (completedIds.includes(8) || completedIds.some(id => id > 8)) count++;
+    // Task 6: Reverse Parallel Kerb Park / Finish Line (Checkpoint 9)
+    if (completedIds.includes(9) || completedIds.some(id => id >= 9)) count++;
+    return Math.min(6, Math.max(0, count));
+  }, []);
+
   // Trigger an Immediate Critical Fail
   const triggerFail = useCallback((reason: string) => {
     if (criticalFailItem) return;
@@ -438,29 +492,52 @@ export default function App() {
     soundManager.playWarningBuzzer();
     setIsTestRunning(false);
 
+    const { score } = calculateDrivingScore(minorFaults, true);
+    const cpTasks = computeCompletedTasksCount(completedCheckpointIdsRef.current);
+    const listTasks = tasksRef.current.filter(t => t.isCompleted).length;
+    const levelTasks = Math.min(6, Math.max(0, currentLevelIdRef.current - 1));
+    const tasksDone = Math.min(6, Math.max(cpTasks, listTasks, levelTasks));
+
     setTestResult({
       passed: false,
-      score: Math.max(0, 75 - minorFaults.length * 5),
+      score,
       totalScore: 100,
       minorFaults,
       criticalFailItem: reason,
-      tasksCompleted: currentTaskIndex,
-      totalTasks: tasks.length,
+      tasksCompleted: tasksDone,
+      totalTasks: 6,
       timeElapsed,
       completedAt: new Date().toLocaleTimeString(),
       state: 'NSW'
     });
-  }, [criticalFailItem, currentTaskIndex, minorFaults, tasks.length, timeElapsed]);
+  }, [computeCompletedTasksCount, criticalFailItem, minorFaults, timeElapsed]);
 
-  // Check speed limits during drive
+  // Check speed limits during drive with Australian Driving Test tolerance (Roads & Maritime RMS standard)
   const handleSpeedCheck = useCallback((speed: number) => {
     if (currentMode === 'freedrive' || !isTestRunning) return;
-    if (speed > currentSpeedLimit + 3) {
+    const now = Date.now();
+    const dt = Math.min(0.2, (now - lastSpeedCheckTimeRef.current) / 1000);
+    lastSpeedCheckTimeRef.current = now;
+
+    // Australian Test Standard:
+    // Minor margin: 1-4 km/h over the limit (e.g. 41-44 in a 40) is tolerated briefly on road crests/undulations.
+    // Sustained overspeed (>2.5s) or excessive overspeed (>= 6 km/h over in 40, >= 8 km/h elsewhere) results in fault / fail.
+    const excess = speed - currentSpeedLimit;
+
+    if (excess > 2.0) {
+      overspeedTimerRef.current += dt;
       if (currentSpeedLimit === 40) {
-        triggerFail(`Exceeding 40 km/h School Zone Speed Limit (${Math.round(speed)} km/h)`);
+        if (excess >= 6.0 || overspeedTimerRef.current > 2.5) {
+          triggerFail(`Exceeding 40 km/h School/Village Zone Speed Limit (${Math.round(speed)} km/h)`);
+        }
       } else {
-        addMinorFault('Speed Exceedance', `Travelling at ${Math.round(speed)} km/h in a ${currentSpeedLimit} km/h zone.`);
+        if (excess >= 10.0 || overspeedTimerRef.current > 2.5) {
+          addMinorFault('Speed Exceedance', `Travelling at ${Math.round(speed)} km/h in a ${currentSpeedLimit} km/h zone.`);
+          overspeedTimerRef.current = 0; // reset to avoid rapid repeated faults
+        }
       }
+    } else {
+      overspeedTimerRef.current = Math.max(0, overspeedTimerRef.current - dt * 2);
     }
   }, [addMinorFault, currentMode, currentSpeedLimit, isTestRunning, triggerFail]);
 
@@ -474,11 +551,10 @@ export default function App() {
   // Complete a level with stars calculation and auto-advance queue
   const completeLevel = useCallback((levelId: number, targetNextLevelId?: number, isContinuousDrive: boolean = false) => {
     setIsLevelPassed(true);
-    soundManager.playSuccessChime();
 
-    // Calculate stars: 3 stars if 0 minor faults, 2 stars if <=2 faults, 1 star otherwise
+    // Calculate stars and official Australian driving score
     const stars = minorFaults.length === 0 ? 3 : minorFaults.length <= 2 ? 2 : 1;
-    const score = Math.max(60, 100 - minorFaults.length * 10);
+    const { score, passed } = calculateDrivingScore(minorFaults, false);
     const nextId = targetNextLevelId ?? (levelId + 1);
 
     setLevelProgress(prev => {
@@ -507,17 +583,21 @@ export default function App() {
     // If final course level (Course 5) is completed OR all 9 checkpoints completed:
     if (levelId === 5 || levelId === 10) {
       try {
-        confetti({ particleCount: 90, spread: 75, origin: { y: 0.55 } });
+        confetti({ particleCount: 120, spread: 80, origin: { y: 0.55 } });
       } catch (e) {
         console.warn('Confetti error', e);
       }
+      soundManager.playCelebrationFanfare();
+      soundManager.speakAnnouncement(
+        `Driving course completed! Outstanding work. Your final test score is ${score} percent.`
+      );
       setTestResult({
-        passed: true,
+        passed,
         score,
         totalScore: 100,
         minorFaults,
-        tasksCompleted: 9,
-        totalTasks: 9,
+        tasksCompleted: 6,
+        totalTasks: 6,
         timeElapsed,
         completedAt: new Date().toLocaleTimeString(),
         state: 'NSW'
@@ -525,6 +605,8 @@ export default function App() {
       setAutoAdvance(null);
       return;
     }
+
+    soundManager.playSuccessChime();
 
     // In continuous drive mode along the road course (Levels 1-5), seamlessly transition
     // current level without any teleportation or physics reset!
@@ -555,6 +637,16 @@ export default function App() {
     // Advance active checkpoint index
     const nextCpIdx = Math.min(ROAD_CHECKPOINTS.length - 1, checkpointId);
     setActiveCheckpointIndex(nextCpIdx);
+
+    // Synchronize Official Drive Test tasks state & active task index
+    const tasksDoneCount = computeCompletedTasksCount(updatedCompleted);
+    setCurrentTaskIndex(Math.min(5, tasksDoneCount));
+    setTasks(prevTasks =>
+      prevTasks.map((t, idx) => ({
+        ...t,
+        isCompleted: idx < tasksDoneCount
+      }))
+    );
 
     // Map road milestones to Course levels 1-5
     let completedCourseLevelId: number | null = null;
@@ -587,6 +679,11 @@ export default function App() {
     }
 
     const isAllDone = checkpointId >= 9 || updatedCompleted.length >= ROAD_CHECKPOINTS.length;
+    if (isAllDone) {
+      soundManager.playCelebrationFanfare();
+      soundManager.speakAnnouncement("Course complete! All 9 checkpoints cleared! Driving test completed.");
+    }
+
     const nextLevelObj = nextCourseLevelId ? DRIVING_LEVELS.find(l => l.id === nextCourseLevelId) : null;
     const bannerTitle = isAllDone
       ? '🎉 COURSE COMPLETE: 9/9 CHECKPOINTS CLEARED!'
@@ -724,6 +821,7 @@ export default function App() {
     setTestResult(null);
     setTimeElapsed(0);
     setIsTestRunning(true);
+    overspeedTimerRef.current = 0;
 
     // Map selected course level to corresponding starting checkpoint
     let startingCheckpointIdx = 0;
@@ -749,8 +847,25 @@ export default function App() {
     setActiveCheckpointIndex(startingCheckpointIdx);
     setCompletedCheckpointIds(completedIds);
 
+    // Sync tasks and currentTaskIndex with starting level
+    const initialTasksDone = computeCompletedTasksCount(completedIds);
+    setCurrentTaskIndex(Math.min(5, initialTasksDone));
+    setTasks(prevTasks =>
+      prevTasks.map((t, idx) => ({
+        ...t,
+        isCompleted: idx < initialTasksDone
+      }))
+    );
+
+    // Reset manual environment override so the new level's atmosphere takes effect
+    setEnvironmentOverride(null);
+    const isNightLevel = level.situation?.environment === 'night_twilight';
+    const isDuskLevel = level.situation?.environment === 'dusk_sunset';
+    setIsNightMode(isNightLevel);
+
     // Position vehicle according to level spawn coordinates
     const hasInitialSpeed = Boolean(level.spawnSpeed && level.spawnSpeed > 0);
+    const needHeadlights = isNightLevel || isDuskLevel;
     setVehicleState({
       ...INITIAL_VEHICLE_STATE,
       x: level.spawnX,
@@ -758,7 +873,9 @@ export default function App() {
       rotation: level.spawnRotation || 0,
       gear: hasInitialSpeed ? 'D' : 'P',
       handbrake: !hasInitialSpeed,
-      speed: level.spawnSpeed || 0
+      speed: level.spawnSpeed || 0,
+      headlights: needHeadlights,
+      headlightMode: needHeadlights ? 'low' : 'off'
     });
     setResetSignal(prev => prev + 1);
 
@@ -817,6 +934,70 @@ export default function App() {
   const handleResetCar = useCallback(() => {
     handleSelectLevel(currentLevel);
   }, [currentLevel, handleSelectLevel]);
+
+  // Save current game session state
+  const handleSaveCurrentSession = useCallback(() => {
+    const currentCheckpoint = ROAD_CHECKPOINTS[activeCheckpointIndex] || ROAD_CHECKPOINTS[0];
+    const { score } = calculateDrivingScore(minorFaults, !!criticalFailItem);
+    SaveGameService.saveGame({
+      saveName: `Course ${currentLevelId} • ${currentCheckpoint.title}`,
+      currentLevelId,
+      currentMode,
+      activeCheckpointIndex,
+      completedCheckpointIds,
+      vehicleState,
+      minorFaults,
+      criticalFailItem,
+      timeElapsed,
+      licenseStage,
+      levelProgress,
+      scoreSnapshot: score
+    });
+  }, [
+    activeCheckpointIndex,
+    completedCheckpointIds,
+    criticalFailItem,
+    currentLevelId,
+    currentMode,
+    levelProgress,
+    licenseStage,
+    minorFaults,
+    timeElapsed,
+    vehicleState
+  ]);
+
+  // Resume saved game session state
+  const handleResumeSession = useCallback((saved: SavedGameState) => {
+    setCurrentLevelId(saved.currentLevelId);
+    setCurrentMode(saved.currentMode);
+    setActiveCheckpointIndex(saved.activeCheckpointIndex);
+    setCompletedCheckpointIds(saved.completedCheckpointIds || []);
+    setMinorFaults(saved.minorFaults || []);
+    setCriticalFailItem(saved.criticalFailItem);
+    setTimeElapsed(saved.timeElapsed || 0);
+    setLicenseStage(saved.licenseStage || 'L');
+    if (saved.levelProgress) {
+      setLevelProgress(saved.levelProgress);
+    }
+    setVehicleState(saved.vehicleState);
+    setResetSignal(prev => prev + 1);
+    setIsTestRunning(true);
+    setTestResult(null);
+    setAutoAdvance(null);
+
+    // Sync tasks and currentTaskIndex when resuming
+    const resumedTaskCount = computeCompletedTasksCount(saved.completedCheckpointIds || []);
+    setCurrentTaskIndex(Math.min(5, resumedTaskCount));
+    setTasks(prevTasks =>
+      prevTasks.map((t, idx) => ({
+        ...t,
+        isCompleted: idx < resumedTaskCount
+      }))
+    );
+
+    const cpTitle = ROAD_CHECKPOINTS[saved.activeCheckpointIndex]?.title || 'Waypoint';
+    soundManager.speakAnnouncement(`Resumed test at ${cpTitle}`);
+  }, [computeCompletedTasksCount]);
 
   // Header category selection: Course, Practice, Exam
   const handleSelectCategory = (cat: LevelCategory) => {
@@ -896,6 +1077,9 @@ export default function App() {
         onResetCar={handleResetCar}
         cameraView={cameraView}
         onSetCameraView={setCameraView}
+        onOpenSaveModal={() => setIsSaveModalOpen(true)}
+        onOpenSituationCard={() => setIsSituationCardOpen(prev => !prev)}
+        activeEnvironment={activeEnvironment}
       />
 
       {/* 3D Simulation Canvas - Full Viewport Focused on the Car */}
@@ -917,6 +1101,7 @@ export default function App() {
         onParkAlignCheck={handleParkAlignCheck}
         onLaneDisciplineAlert={handleLaneDisciplineAlert}
         isNightMode={isNightMode}
+        environment={activeEnvironment}
         activeCheckpointIndex={activeCheckpointIndex}
         completedCheckpointIds={completedCheckpointIds}
         onCheckpointPassed={handleCheckpointPassed}
@@ -936,13 +1121,16 @@ export default function App() {
         onClose={() => setShowCarGuide(false)}
         onMoveToNextCourse={handleProceedToNextCourse}
         onOpenTestResult={() => {
+          const { score, passed } = calculateDrivingScore(minorFaults, !!criticalFailItem);
+          const tasksDone = computeCompletedTasksCount(completedCheckpointIds);
           setTestResult({
-            passed: true,
-            score: Math.max(75, 100 - minorFaults.length * 10),
+            passed,
+            score,
             totalScore: 100,
             minorFaults,
-            tasksCompleted: 9,
-            totalTasks: 9,
+            criticalFailItem: criticalFailItem ?? undefined,
+            tasksCompleted: Math.max(1, tasksDone),
+            totalTasks: 6,
             timeElapsed,
             completedAt: new Date().toLocaleTimeString(),
             state: 'NSW'
@@ -1042,6 +1230,39 @@ export default function App() {
           onToggleCarBeacon={() => setShowCarGuide(prev => !prev)}
           autoAdvance={autoAdvance}
           onCancelAutoAdvance={() => setAutoAdvance(null)}
+          onOpenSituationCard={() => setIsSituationCardOpen(prev => !prev)}
+        />
+      )}
+
+      {/* Course Atmosphere & Situation Details Card Modal */}
+      {isSituationCardOpen && (
+        <CourseSituationCard
+          levelTitle={currentLevel.title}
+          badge={currentLevel.badge}
+          situation={currentLevel.situation}
+          activeEnvironment={activeEnvironment}
+          onSelectEnvironmentOverride={(env) => {
+            setEnvironmentOverride(env);
+            if (env === 'night_twilight') {
+              setIsNightMode(true);
+              setVehicleState(v => ({ ...v, headlights: true, headlightMode: 'low' }));
+            } else if (isNightMode) {
+              setIsNightMode(false);
+            }
+          }}
+          overrideActive={environmentOverride !== null}
+          onResetEnvironmentOverride={() => {
+            setEnvironmentOverride(null);
+            if (currentLevel.situation?.environment === 'night_twilight') {
+              setIsNightMode(true);
+              setVehicleState(v => ({ ...v, headlights: true, headlightMode: 'low' }));
+            } else {
+              setIsNightMode(false);
+            }
+          }}
+          isOpen={isSituationCardOpen}
+          onClose={() => setIsSituationCardOpen(false)}
+          className="fixed top-20 left-3 sm:left-4 z-40 max-w-sm sm:max-w-md w-[92%] sm:w-full pointer-events-auto select-none"
         />
       )}
 
@@ -1116,6 +1337,18 @@ export default function App() {
         isLookingBehind={isLookingBehind}
         onToggleLookBehind={() => setIsLookingBehind(prev => !prev)}
         onOpenSeasonGuide={() => setIsSeasonGuideOpen(true)}
+        onOpenSaveModal={() => setIsSaveModalOpen(true)}
+      />
+
+      {/* Save Game & Session Resume Modal */}
+      <SaveGameModal
+        isOpen={isSaveModalOpen}
+        onClose={() => setIsSaveModalOpen(false)}
+        onSaveCurrentSession={handleSaveCurrentSession}
+        onResumeSession={handleResumeSession}
+        currentLevelTitle={currentLevel.title}
+        currentCheckpointTitle={ROAD_CHECKPOINTS[activeCheckpointIndex]?.title || 'Starting Point'}
+        currentScore={calculateDrivingScore(minorFaults, !!criticalFailItem).score}
       />
 
       {/* Keyboard Shortcuts & Controls Guide Modal */}

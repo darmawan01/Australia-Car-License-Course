@@ -1,6 +1,6 @@
 import React, { useEffect, useRef } from 'react';
 import * as THREE from 'three';
-import { CameraView, HazardType, VehicleState } from '../types';
+import { CameraView, CourseEnvironment, HazardType, VehicleState } from '../types';
 import { soundManager } from '../utils/audio';
 import { AITrafficManager } from './AITrafficManager';
 import { ROAD_CHECKPOINTS } from '../data/checkpointsData';
@@ -21,6 +21,7 @@ interface ThreeCanvasProps {
   onRoundaboutEnter?: () => void;
   onParkAlignCheck?: (distanceToKerb: number, angleDiff: number) => void;
   isNightMode?: boolean;
+  environment?: CourseEnvironment;
   activeCheckpointIndex?: number;
   completedCheckpointIds?: number[];
   onCheckpointPassed?: (checkpointId: number, title: string) => void;
@@ -45,6 +46,7 @@ export const ThreeCanvas: React.FC<ThreeCanvasProps> = ({
   onRoundaboutEnter,
   onParkAlignCheck,
   isNightMode = false,
+  environment,
   activeCheckpointIndex = 0,
   completedCheckpointIds = [],
   onCheckpointPassed,
@@ -82,6 +84,7 @@ export const ThreeCanvas: React.FC<ThreeCanvasProps> = ({
   const cameraSnapNeededRef = useRef<boolean>(true);
   const triggeredCheckpointsRef = useRef<Set<number>>(new Set(completedCheckpointIds));
   const lastStateSyncTimeRef = useRef<number>(0);
+  const offroadDurationRef = useRef<number>(0);
 
   // Synchronize triggered checkpoints when completed list changes
   useEffect(() => {
@@ -103,6 +106,10 @@ export const ThreeCanvas: React.FC<ThreeCanvasProps> = ({
       physicsRef.current.steering = 0;
       cameraSnapNeededRef.current = true;
       triggeredCheckpointsRef.current = new Set(completedCheckpointIds);
+      offroadDurationRef.current = 0;
+      stopSignTimerRef.current = 0;
+      zebraTimerRef.current = 0;
+      trafficManagerRef.current?.resetPositions(vehicleState.x, vehicleState.z, vehicleState.rotation);
     }
   }, [resetSignal, vehicleState.x, vehicleState.z, vehicleState.rotation, vehicleState.speed, vehicleState.gear, vehicleState.handbrake, completedCheckpointIds]);
 
@@ -157,6 +164,24 @@ export const ThreeCanvas: React.FC<ThreeCanvasProps> = ({
   const onLaneDisciplineAlertRef = useRef(onLaneDisciplineAlert);
   onLaneDisciplineAlertRef.current = onLaneDisciplineAlert;
 
+  const onKerbCollisionRef = useRef(onKerbCollision);
+  onKerbCollisionRef.current = onKerbCollision;
+
+  const onSpeedCheckRef = useRef(onSpeedCheck);
+  onSpeedCheckRef.current = onSpeedCheck;
+
+  const onStopSignHaltRef = useRef(onStopSignHalt);
+  onStopSignHaltRef.current = onStopSignHalt;
+
+  const onZebraStopRef = useRef(onZebraStop);
+  onZebraStopRef.current = onZebraStop;
+
+  const onRoundaboutEnterRef = useRef(onRoundaboutEnter);
+  onRoundaboutEnterRef.current = onRoundaboutEnter;
+
+  const onParkAlignCheckRef = useRef(onParkAlignCheck);
+  onParkAlignCheckRef.current = onParkAlignCheck;
+
   const lastLaneAlertTimeRef = useRef<number>(0);
   const lastLaneZoneRef = useRef<'left' | 'center' | 'right'>('left');
 
@@ -173,10 +198,93 @@ export const ThreeCanvas: React.FC<ThreeCanvasProps> = ({
     const carScreenVec = new THREE.Vector3();
     const lastScreenPosTimeRef = { current: 0 };
 
+    // Determine active atmospheric environment & low light status
+    const effectiveEnv: CourseEnvironment = isNightMode ? 'night_twilight' : (environment || 'morning_sunrise');
+    const isLowLight = isNightMode || effectiveEnv === 'night_twilight' || effectiveEnv === 'dusk_sunset' || effectiveEnv === 'rainy_wet';
+
+    // Environment-specific sky, lighting, fog & bitumen parameters
+    let skyColor = 0x82b2e8;
+    let fogColor = 0x82b2e8;
+    let fogDensity = 0.0035;
+    let ambientColor = 0xffffff;
+    let ambientIntensity = 0.75;
+    let sunColor = 0xfffaed;
+    let sunIntensity = 1.2;
+    const sunPos = new THREE.Vector3(60, 100, 40);
+    let roadBitumenColor = 0x2b2d42;
+    let roadRoughness = 0.85;
+    let roadMetalness = 0.15;
+    let groundColor = 0x4f772d;
+
+    if (effectiveEnv === 'morning_sunrise') {
+      skyColor = 0xf59e0b;
+      fogColor = 0xfde68a;
+      fogDensity = 0.003;
+      ambientColor = 0xffedd5;
+      ambientIntensity = 0.85;
+      sunColor = 0xfde047;
+      sunIntensity = 1.35;
+      sunPos.set(80, 45, 60);
+      groundColor = 0x588157;
+    } else if (effectiveEnv === 'midday_clear') {
+      skyColor = 0x60a5fa;
+      fogColor = 0x93c5fd;
+      fogDensity = 0.0025;
+      ambientColor = 0xffffff;
+      ambientIntensity = 0.8;
+      sunColor = 0xffffff;
+      sunIntensity = 1.3;
+      sunPos.set(20, 110, 20);
+      groundColor = 0x4f772d;
+    } else if (effectiveEnv === 'school_rush') {
+      skyColor = 0x94a3b8;
+      fogColor = 0xcbd5e1;
+      fogDensity = 0.0032;
+      ambientColor = 0xf1f5f9;
+      ambientIntensity = 0.72;
+      sunColor = 0xffedd5;
+      sunIntensity = 1.05;
+      sunPos.set(40, 70, 40);
+      groundColor = 0x476a30;
+    } else if (effectiveEnv === 'rainy_wet') {
+      skyColor = 0x334155;
+      fogColor = 0x475569;
+      fogDensity = 0.0048;
+      ambientColor = 0x64748b;
+      ambientIntensity = 0.55;
+      sunColor = 0x94a3b8;
+      sunIntensity = 0.6;
+      sunPos.set(30, 60, 30);
+      groundColor = 0x2d3a2b;
+      roadBitumenColor = 0x111318; // Wet dark reflective bitumen!
+      roadRoughness = 0.28;
+      roadMetalness = 0.6;
+    } else if (effectiveEnv === 'dusk_sunset') {
+      skyColor = 0xc2410c;
+      fogColor = 0xe11d48;
+      fogDensity = 0.0035;
+      ambientColor = 0xfdba74;
+      ambientIntensity = 0.65;
+      sunColor = 0xf97316;
+      sunIntensity = 1.1;
+      sunPos.set(-70, 25, 70);
+      groundColor = 0x3f4f2c;
+    } else if (effectiveEnv === 'night_twilight') {
+      skyColor = 0x090d16;
+      fogColor = 0x090d16;
+      fogDensity = 0.004;
+      ambientColor = 0x223355;
+      ambientIntensity = 0.55;
+      sunColor = 0x4466aa;
+      sunIntensity = 0.3;
+      sunPos.set(60, 100, 40);
+      groundColor = 0x1a2b1f;
+    }
+
     // --- Scene, Camera, Renderer ---
     const scene = new THREE.Scene();
-    scene.background = new THREE.Color(isNightMode ? 0x090d16 : 0x82b2e8);
-    scene.fog = new THREE.FogExp2(isNightMode ? 0x090d16 : 0x82b2e8, 0.0035);
+    scene.background = new THREE.Color(skyColor);
+    scene.fog = new THREE.FogExp2(fogColor, fogDensity);
 
     // --- Interactive AI Traffic & Australian Hazard Engine ---
     const trafficManager = new AITrafficManager(scene);
@@ -194,11 +302,11 @@ export const ThreeCanvas: React.FC<ThreeCanvasProps> = ({
     container.appendChild(renderer.domElement);
 
     // --- Lighting ---
-    const ambientLight = new THREE.AmbientLight(isNightMode ? 0x223355 : 0xffffff, isNightMode ? 0.6 : 0.75);
+    const ambientLight = new THREE.AmbientLight(ambientColor, ambientIntensity);
     scene.add(ambientLight);
 
-    const sunLight = new THREE.DirectionalLight(isNightMode ? 0x4466aa : 0xfffaed, isNightMode ? 0.3 : 1.2);
-    sunLight.position.set(60, 100, 40);
+    const sunLight = new THREE.DirectionalLight(sunColor, sunIntensity);
+    sunLight.position.copy(sunPos);
     sunLight.castShadow = true;
     sunLight.shadow.mapSize.width = 2048;
     sunLight.shadow.mapSize.height = 2048;
@@ -401,7 +509,7 @@ export const ThreeCanvas: React.FC<ThreeCanvasProps> = ({
     // Ground Grass / Nature Strips
     const groundGeo = new THREE.PlaneGeometry(1000, 1000);
     const groundMat = new THREE.MeshStandardMaterial({
-      color: isNightMode ? 0x1a2b1f : 0x4f772d,
+      color: groundColor,
       roughness: 0.9,
       metalness: 0.1
     });
@@ -411,13 +519,55 @@ export const ThreeCanvas: React.FC<ThreeCanvasProps> = ({
     ground.receiveShadow = true;
     worldGroup.add(ground);
 
+    // Dynamic 3D Torrential Rain Particle System (for rainy_wet course situation)
+    let rainLines: THREE.LineSegments | null = null;
+    let rainPositions: Float32Array | null = null;
+    let rainVelocities: Float32Array | null = null;
+    const rainCount = 2200;
+
+    if (effectiveEnv === 'rainy_wet') {
+      const rainGeo = new THREE.BufferGeometry();
+      rainPositions = new Float32Array(rainCount * 6);
+      rainVelocities = new Float32Array(rainCount);
+      for (let i = 0; i < rainCount; i++) {
+        const rx = (Math.random() - 0.5) * 80;
+        const ry = Math.random() * 32;
+        const rz = (Math.random() - 0.5) * 80;
+        rainPositions[i * 6] = rx;
+        rainPositions[i * 6 + 1] = ry;
+        rainPositions[i * 6 + 2] = rz;
+        rainPositions[i * 6 + 3] = rx - 0.12;
+        rainPositions[i * 6 + 4] = ry - 1.1;
+        rainPositions[i * 6 + 5] = rz;
+        rainVelocities[i] = 26 + Math.random() * 14;
+      }
+      rainGeo.setAttribute('position', new THREE.BufferAttribute(rainPositions, 3));
+      const rainMat = new THREE.LineBasicMaterial({
+        color: 0x93c5fd,
+        transparent: true,
+        opacity: 0.65
+      });
+      rainLines = new THREE.LineSegments(rainGeo, rainMat);
+      scene.add(rainLines);
+    }
+
     // Helper to build asphalt road segment
-    function createRoadSegment(x: number, z: number, w: number, l: number, rotY = 0) {
+    function createRoadSegment(
+      x: number,
+      z: number,
+      w: number,
+      l: number,
+      rotY = 0,
+      leftKerb = true,
+      rightKerb = true,
+      leftPath = true,
+      rightPath = true
+    ) {
       const roadGeo = new THREE.PlaneGeometry(w, l);
       const roadMat = new THREE.MeshStandardMaterial({
-        color: 0x2b2d42,
-        roughness: 0.85,
-        metalness: 0.15
+        color: roadBitumenColor,
+        roughness: roadRoughness,
+        metalness: roadMetalness
       });
       const mesh = new THREE.Mesh(roadGeo, roadMat);
       mesh.rotation.x = -Math.PI / 2;
@@ -426,55 +576,287 @@ export const ThreeCanvas: React.FC<ThreeCanvasProps> = ({
       mesh.receiveShadow = true;
       worldGroup.add(mesh);
 
-      // Add concrete kerbs along both edges
+      // Add concrete kerbs along specified edges
       const kerbGeo = new THREE.BoxGeometry(0.35, 0.25, l);
-      const kerbMat = new THREE.MeshStandardMaterial({ color: 0xcccccc, roughness: 0.7 });
+      const kerbMat = new THREE.MeshStandardMaterial({ color: 0xd1d5db, roughness: 0.7 });
       
-      const leftKerb = new THREE.Mesh(kerbGeo, kerbMat);
-      leftKerb.position.set(x - w / 2, 0.1, z);
-      leftKerb.rotation.y = rotY;
-      leftKerb.castShadow = true;
-      leftKerb.receiveShadow = true;
-      worldGroup.add(leftKerb);
+      const cosR = Math.cos(rotY);
+      const sinR = Math.sin(rotY);
 
-      const rightKerb = new THREE.Mesh(kerbGeo, kerbMat);
-      rightKerb.position.set(x + w / 2, 0.1, z);
-      rightKerb.rotation.y = rotY;
-      rightKerb.castShadow = true;
-      rightKerb.receiveShadow = true;
-      worldGroup.add(rightKerb);
+      if (leftKerb) {
+        const lKerb = new THREE.Mesh(kerbGeo, kerbMat);
+        lKerb.position.set(x - (w / 2) * cosR, 0.1, z - (w / 2) * sinR);
+        lKerb.rotation.y = rotY;
+        lKerb.castShadow = true;
+        lKerb.receiveShadow = true;
+        worldGroup.add(lKerb);
+      }
 
-      // Footpath / Sidewalk
+      if (rightKerb) {
+        const rKerb = new THREE.Mesh(kerbGeo, kerbMat);
+        rKerb.position.set(x + (w / 2) * cosR, 0.1, z + (w / 2) * sinR);
+        rKerb.rotation.y = rotY;
+        rKerb.castShadow = true;
+        rKerb.receiveShadow = true;
+        worldGroup.add(rKerb);
+      }
+
+      // Footpath / Sidewalk along specified edges
       const pathGeo = new THREE.PlaneGeometry(2.5, l);
       const pathMat = new THREE.MeshStandardMaterial({ color: 0x9ca3af, roughness: 0.8 });
-      const leftPath = new THREE.Mesh(pathGeo, pathMat);
-      leftPath.rotation.x = -Math.PI / 2;
-      leftPath.rotation.z = rotY;
-      leftPath.position.set(x - w / 2 - 1.25, 0.12, z);
-      leftPath.receiveShadow = true;
-      worldGroup.add(leftPath);
+      if (leftPath) {
+        const lPath = new THREE.Mesh(pathGeo, pathMat);
+        lPath.rotation.x = -Math.PI / 2;
+        lPath.rotation.z = rotY;
+        lPath.position.set(x - (w / 2 + 1.25) * cosR, 0.12, z - (w / 2 + 1.25) * sinR);
+        lPath.receiveShadow = true;
+        worldGroup.add(lPath);
+      }
 
-      const rightPath = new THREE.Mesh(pathGeo, pathMat);
-      rightPath.rotation.x = -Math.PI / 2;
-      rightPath.rotation.z = rotY;
-      rightPath.position.set(x + w / 2 + 1.25, 0.12, z);
-      rightPath.receiveShadow = true;
-      worldGroup.add(rightPath);
+      if (rightPath) {
+        const rPath = new THREE.Mesh(pathGeo, pathMat);
+        rPath.rotation.x = -Math.PI / 2;
+        rPath.rotation.z = rotY;
+        rPath.position.set(x + (w / 2 + 1.25) * cosR, 0.12, z + (w / 2 + 1.25) * sinR);
+        rPath.receiveShadow = true;
+        worldGroup.add(rPath);
+      }
 
       return mesh;
     }
 
     // Main Australian 2-way road (Left-hand drive! Left lane: x = -2.5 to -0.5, Right lane: x = 0.5 to 2.5)
-    // Road width: 9 meters (4.5m per direction)
+    // Standard Road width: 9 meters (4.5m per direction)
     const ROAD_WIDTH = 9;
-    // Extended Main Australian Highway / City Boulevard (z = 40 to -480)
-    createRoadSegment(0, -220, ROAD_WIDTH, 480);
 
-    // City Cross Branch Street at z = -270 (Branching west to West Civic and east to East Commerce)
-    createRoadSegment(0, -270, ROAD_WIDTH, 180, Math.PI / 2);
+    // --- Clean Non-Overlapping Road Network ---
+    // 1. North Highway & Suburban Corridor (z = 40 down to -258)
+    // Runs cleanly up to the intersection entry line without overlapping cross streets
+    createRoadSegment(0, -109, ROAD_WIDTH, 298, 0, true, true, true, true);
 
-    // Cross residential street for parking & turns (at z = -360)
-    createRoadSegment(65, -360, ROAD_WIDTH, 130, Math.PI / 2);
+    // 2. City Cross Junction at z = -270 (Connecting to West Civic branch & East Commerce branch)
+    // Central junction box has open edges with no kerbs or sidewalks blocking vehicle turns!
+    createRoadSegment(0, -270, ROAD_WIDTH, 24, 0, false, false, false, false);
+
+    // West Branch Street (West Civic left-turn road):
+    createRoadSegment(-46.5, -270, ROAD_WIDTH, 77, Math.PI / 2, true, true, true, true);
+
+    // East Branch Street (East Commerce right-turn road):
+    createRoadSegment(46.5, -270, ROAD_WIDTH, 77, Math.PI / 2, true, true, true, true);
+
+    // Smooth corner fillets (curved asphalt aprons) so turning left or right has wide, generous asphalt
+    createRoadSegment(-6.75, -264, 4.5, 12, 0, false, false, false, false);
+    createRoadSegment(6.75, -264, 4.5, 12, 0, false, false, false, false);
+    createRoadSegment(-6.75, -276, 4.5, 12, 0, false, false, false, false);
+    createRoadSegment(6.75, -276, 4.5, 12, 0, false, false, false, false);
+
+    // 3. Mid City Road (Multi-lane approach & STOP Sign, from z = -282 to -328)
+    // Stops cleanly at the roundabout entrance give-way line (z = -328) without overlapping the roundabout!
+    createRoadSegment(0, -305, ROAD_WIDTH, 46, 0, true, true, true, true);
+
+    // 4. Roundabout Entrance & Exit transition asphalt pads
+    createRoadSegment(0, -331.5, 13, 7, 0, false, false, false, false);
+    createRoadSegment(0, -358.5, 13, 7, 0, false, false, false, false);
+
+    // Roundabout West Exit Road (First exit - Turn Left at Roundabout for Task 5!):
+    // Runs from outer ring edge (x = -16.5) west to x = -80 at z = -345
+    createRoadSegment(-48.5, -345, ROAD_WIDTH, 64, Math.PI / 2, true, true, true, true);
+
+    // Roundabout East Exit Road:
+    createRoadSegment(48.5, -345, ROAD_WIDTH, 64, Math.PI / 2, true, true, true, true);
+
+    // 5. South Highway beyond Roundabout (from z = -362 to -460, where Checkpoint 9 Finish Line sits)
+    createRoadSegment(0, -411, ROAD_WIDTH, 98, 0, true, true, true, true);
+
+    // 6. Cross residential street for parallel parking (at z = -360, x = 4.5 to 75)
+    createRoadSegment(39.75, -360, ROAD_WIDTH, 70.5, Math.PI / 2, true, true, true, true);
+
+    // =========================================================================
+    // 7. WATTLE CREEK HISTORIC VILLAGE & RURAL COUNTRY NETWORK (z = 40 to 260)
+    // =========================================================================
+    // (A) Village Main Street (z = 40 to 226): Length = 186m, center at (0, 133)
+    createRoadSegment(0, 133, ROAD_WIDTH, 186, 0, true, true, true, true);
+
+    // (B) Village Green Central Island & Roundabout Apron (at z = 240)
+    const VILLAGE_ROUNDABOUT_Z = 240;
+    const vIslandGeo = new THREE.CylinderGeometry(10.5, 10.5, 0.45, 36);
+    const vIslandMat = new THREE.MeshStandardMaterial({ color: 0x3d7040, roughness: 0.85 });
+    const vIsland = new THREE.Mesh(vIslandGeo, vIslandMat);
+    vIsland.position.set(0, 0.22, VILLAGE_ROUNDABOUT_Z);
+    vIsland.receiveShadow = true;
+    worldGroup.add(vIsland);
+
+    // Village Green stone rim
+    const vRimGeo = new THREE.TorusGeometry(10.6, 0.28, 12, 36);
+    const vRimMat = new THREE.MeshStandardMaterial({ color: 0xe2e8f0, roughness: 0.7 });
+    const vRim = new THREE.Mesh(vRimGeo, vRimMat);
+    vRim.rotation.x = Math.PI / 2;
+    vRim.position.set(0, 0.2, VILLAGE_ROUNDABOUT_Z);
+    worldGroup.add(vRim);
+
+    // Village Green circulating asphalt ring (inner 10.7m, outer 19.8m)
+    const vRingGeo = new THREE.RingGeometry(10.7, 19.8, 36);
+    const vRingMat = new THREE.MeshStandardMaterial({ color: roadBitumenColor, roughness: roadRoughness, metalness: roadMetalness });
+    const vRing = new THREE.Mesh(vRingGeo, vRingMat);
+    vRing.rotation.x = -Math.PI / 2;
+    vRing.position.set(0, 0.015, VILLAGE_ROUNDABOUT_Z);
+    vRing.receiveShadow = true;
+    worldGroup.add(vRing);
+
+    // Transition pads for Village Green roundabout entrances/exits
+    createRoadSegment(0, 222.5, 14, 8, 0, false, false, false, false);
+    createRoadSegment(0, 257.5, 14, 8, 0, false, false, false, false);
+
+    // (C) East Farmstead Country Lane:
+    // Starts at roundabout outer rim (x = 19.8, z = 240) and heads east to x = 125
+    createRoadSegment(72.5, 240, 8, 105, Math.PI / 2, true, true, false, false);
+    // Curves south from z = 240 down to z = -40 at x = 125
+    createRoadSegment(125, 100, 8, 280, 0, true, true, false, false);
+    // Connects back west to Highway at z = -40 (from x = 125 west to x = 4.5)
+    createRoadSegment(65, -40, 8, 120, Math.PI / 2, true, true, false, false);
+
+    // Corner junction pads for smooth farm lane turns
+    createRoadSegment(125, 240, 16, 16, 0, false, false, false, false);
+    createRoadSegment(125, -40, 16, 16, 0, false, false, false, false);
+    createRoadSegment(8.5, -40, 8, 12, 0, false, false, false, false);
+
+    // (D) West Orchard & Cricket Reserve Lane:
+    // Starts at roundabout outer rim (x = -19.8, z = 240) and heads west to x = -85
+    createRoadSegment(-52.5, 240, 8, 65, Math.PI / 2, true, true, false, false);
+    // Curves south down to connect to the West Civic road at z = -270!
+    createRoadSegment(-85, -15, 8, 510, 0, true, true, false, false);
+
+    // --- Dynamic Animated Road Arrows System on Bitumen ---
+    function createNavArrowTexture() {
+      const cvs = document.createElement('canvas');
+      cvs.width = 128; cvs.height = 256;
+      const ctx = cvs.getContext('2d')!;
+      ctx.clearRect(0, 0, 128, 256);
+      
+      // Radiant soft cyan glow
+      const grad = ctx.createRadialGradient(64, 128, 15, 64, 128, 115);
+      grad.addColorStop(0, 'rgba(6, 182, 212, 0.55)');
+      grad.addColorStop(1, 'rgba(6, 182, 212, 0)');
+      ctx.fillStyle = grad;
+      ctx.fillRect(0, 0, 128, 256);
+
+      // High-contrast luminous chevron
+      ctx.fillStyle = '#ffffff';
+      ctx.shadowColor = '#06b6d4';
+      ctx.shadowBlur = 14;
+
+      // Primary Chevron
+      ctx.beginPath();
+      ctx.moveTo(64, 25);
+      ctx.lineTo(112, 105);
+      ctx.lineTo(92, 120);
+      ctx.lineTo(64, 75);
+      ctx.lineTo(36, 120);
+      ctx.lineTo(16, 105);
+      ctx.closePath();
+      ctx.fill();
+
+      // Second Trailing Chevron
+      ctx.beginPath();
+      ctx.moveTo(64, 115);
+      ctx.lineTo(112, 195);
+      ctx.lineTo(92, 210);
+      ctx.lineTo(64, 165);
+      ctx.lineTo(36, 210);
+      ctx.lineTo(16, 195);
+      ctx.closePath();
+      ctx.fill();
+
+      const tex = new THREE.CanvasTexture(cvs);
+      tex.anisotropy = renderer.capabilities.getMaxAnisotropy();
+      return tex;
+    }
+
+    const navArrowTex = createNavArrowTexture();
+    const navArrowGeo = new THREE.PlaneGeometry(1.5, 3.2);
+
+    interface AnimatedRoadArrow {
+      mesh: THREE.Mesh;
+      mat: THREE.MeshBasicMaterial;
+      seqIndex: number;
+    }
+    const animatedRoadArrows: AnimatedRoadArrow[] = [];
+
+    function addAnimatedRoadArrow(x: number, z: number, rotY: number, seqIndex: number) {
+      const mat = new THREE.MeshBasicMaterial({
+        map: navArrowTex,
+        transparent: true,
+        opacity: 0.75,
+        depthWrite: false
+      });
+      const mesh = new THREE.Mesh(navArrowGeo, mat);
+      mesh.rotation.x = -Math.PI / 2;
+      mesh.rotation.z = rotY;
+      mesh.position.set(x, 0.035, z);
+      worldGroup.add(mesh);
+      animatedRoadArrows.push({ mesh, mat, seqIndex });
+    }
+
+    // Deploy Animated Guiding Arrows on Road Bitumen:
+    let arrowSeq = 0;
+    // (A) Australian Keep-Left Highway Lane (x = -2.25): from z = 20 down to -230
+    for (let z = 20; z >= -230; z -= 11) {
+      addAnimatedRoadArrow(-2.25, z, 0, arrowSeq++);
+    }
+
+    // (B) Dedicated Left-Turn Transition into West Civic (z = -236 to -270)
+    addAnimatedRoadArrow(-2.7, -236, 0.12, arrowSeq++);
+    addAnimatedRoadArrow(-3.4, -246, 0.22, arrowSeq++);
+    addAnimatedRoadArrow(-4.1, -256, 0.35, arrowSeq++);
+    addAnimatedRoadArrow(-4.9, -264, 0.65, arrowSeq++);
+    addAnimatedRoadArrow(-7.5, -269.5, Math.PI / 2, arrowSeq++);
+    addAnimatedRoadArrow(-15.5, -269.5, Math.PI / 2, arrowSeq++);
+    addAnimatedRoadArrow(-25.5, -269.5, Math.PI / 2, arrowSeq++);
+    addAnimatedRoadArrow(-36.5, -269.5, Math.PI / 2, arrowSeq++);
+
+    // (C) Center Lane Continuing Straight towards Stop Line & Roundabout (z = -240 to -324)
+    for (let z = -240; z >= -324; z -= 11) {
+      addAnimatedRoadArrow(-1.25, z, 0, arrowSeq++);
+    }
+
+    // (D) Roundabout Entry, Clockwise Circulating Path, and Left-Turn First Exit (Task 5)
+    addAnimatedRoadArrow(-2.25, -328, 0.15, arrowSeq++);
+    addAnimatedRoadArrow(-4.5, -334, 0.45, arrowSeq++);
+    addAnimatedRoadArrow(-8.5, -339, 0.85, arrowSeq++);
+    addAnimatedRoadArrow(-13.0, -343, 1.35, arrowSeq++);
+    // First Exit (Left Turn to West):
+    addAnimatedRoadArrow(-19.0, -347, Math.PI / 2, arrowSeq++);
+    addAnimatedRoadArrow(-27.0, -347, Math.PI / 2, arrowSeq++);
+    addAnimatedRoadArrow(-37.0, -347, Math.PI / 2, arrowSeq++);
+    addAnimatedRoadArrow(-48.0, -347, Math.PI / 2, arrowSeq++);
+
+    // Continuing circulating path towards South Exit & Finish Line (Checkpoint 9):
+    addAnimatedRoadArrow(-12.5, -350, 1.95, arrowSeq++);
+    addAnimatedRoadArrow(-8.0, -356, 2.55, arrowSeq++);
+    addAnimatedRoadArrow(-4.0, -361, 2.95, arrowSeq++);
+    for (let z = -366; z >= -430; z -= 12) {
+      addAnimatedRoadArrow(-2.25, z, 0, arrowSeq++);
+    }
+
+    // (E) Wattle Creek Historic Village High Street (z = 30 heading north to z = 225)
+    // Left lane heading North (+Z in Australia is x = +2.25):
+    for (let z = 30; z <= 220; z += 12) {
+      addAnimatedRoadArrow(2.25, z, Math.PI, arrowSeq++);
+    }
+
+    // (F) Village Green Roundabout Circulation & East Farmstead Lane Exit (z = 240)
+    addAnimatedRoadArrow(2.25, 226, Math.PI - 0.2, arrowSeq++);
+    addAnimatedRoadArrow(5.5, 233, Math.PI - 0.6, arrowSeq++);
+    addAnimatedRoadArrow(10.5, 238, Math.PI - 1.1, arrowSeq++);
+    addAnimatedRoadArrow(15.0, 240, -Math.PI / 2, arrowSeq++);
+    // Farmstead Lane Heading East:
+    for (let x = 24; x <= 116; x += 14) {
+      addAnimatedRoadArrow(x, 242, -Math.PI / 2, arrowSeq++);
+    }
+    // Farmstead Lane Heading South towards Farm Barn (x = 125, z = 230 down to -30):
+    for (let z = 230; z >= -30; z -= 18) {
+      addAnimatedRoadArrow(123, z, 0, arrowSeq++);
+    }
 
     // Helper to generate crisp painted directional lane arrows on bitumen
     function createLaneArrowTexture(type: 'left' | 'straight' | 'right') {
@@ -554,9 +936,9 @@ export const ThreeCanvas: React.FC<ThreeCanvasProps> = ({
 
     // Australian Retroreflective Cat's Eyes / Raised Pavement Markers (RPMs) along centerline
     const catEyeMat = new THREE.MeshStandardMaterial({
-      color: isNightMode ? 0xffffff : 0xcccccc,
-      emissive: isNightMode ? 0xfff0b0 : 0x000000,
-      emissiveIntensity: isNightMode ? 1.6 : 0.0,
+      color: isLowLight ? 0xffffff : 0xcccccc,
+      emissive: isLowLight ? 0xfff0b0 : 0x000000,
+      emissiveIntensity: isLowLight ? 1.6 : 0.0,
       roughness: 0.2
     });
     for (let z = 20; z >= -460; z -= 14) {
@@ -1053,6 +1435,17 @@ export const ThreeCanvas: React.FC<ThreeCanvasProps> = ({
     // School Zone start: School Zone 40
     placeSign('school_zone', -ROAD_WIDTH / 2 - 1.2, -45, 0, 1.5);
 
+    // Twin Flashing Amber Electronic Beacons on School Zone Sign (ARR 81 active beacons)
+    const schoolBeaconGeo = new THREE.SphereGeometry(0.18, 12, 12);
+    const schoolBeaconMat1 = new THREE.MeshBasicMaterial({ color: 0xffb703 });
+    const schoolBeaconMat2 = new THREE.MeshBasicMaterial({ color: 0x4a3b00 });
+    const schoolBeacon1 = new THREE.Mesh(schoolBeaconGeo, schoolBeaconMat1);
+    const schoolBeacon2 = new THREE.Mesh(schoolBeaconGeo, schoolBeaconMat2);
+    schoolBeacon1.position.set(-ROAD_WIDTH / 2 - 1.5, 3.45, -45);
+    schoolBeacon2.position.set(-ROAD_WIDTH / 2 - 0.9, 3.45, -45);
+    worldGroup.add(schoolBeacon1);
+    worldGroup.add(schoolBeacon2);
+
     // School Zone speed 40 reminder & pedestrian crossing ahead
     placeSign('pedestrian', -ROAD_WIDTH / 2 - 1.2, -115, 0);
 
@@ -1244,15 +1637,578 @@ export const ThreeCanvas: React.FC<ThreeCanvasProps> = ({
       });
     }
 
+    // =========================================================================
+    // 7.5 WATTLE CREEK HISTORIC VILLAGE & COUNTRY FARMSTEAD 3D SCENERY
+    // =========================================================================
+    let windmillFanMesh: THREE.Group | null = null;
+
+    // (A) Village Welcome Gateway at z = 48
+    const gatewayGroup = new THREE.Group();
+    const timberPostMat = new THREE.MeshStandardMaterial({ color: 0x5c4033, roughness: 0.9 });
+    const postL = new THREE.Mesh(new THREE.CylinderGeometry(0.25, 0.3, 5.5, 8), timberPostMat);
+    postL.position.set(-6.2, 2.75, 48);
+    postL.castShadow = true;
+    gatewayGroup.add(postL);
+    const postR = new THREE.Mesh(new THREE.CylinderGeometry(0.25, 0.3, 5.5, 8), timberPostMat);
+    postR.position.set(6.2, 2.75, 48);
+    postR.castShadow = true;
+    gatewayGroup.add(postR);
+
+    // Cross beam & Shire Welcome Sign
+    const beam = new THREE.Mesh(new THREE.BoxGeometry(13.2, 0.45, 0.5), timberPostMat);
+    beam.position.set(0, 5.2, 48);
+    beam.castShadow = true;
+    gatewayGroup.add(beam);
+
+    // Green rural shire banner sign
+    const signCvs = document.createElement('canvas');
+    signCvs.width = 512; signCvs.height = 128;
+    const signCtx = signCvs.getContext('2d')!;
+    signCtx.fillStyle = '#1b4332';
+    signCtx.fillRect(0, 0, 512, 128);
+    signCtx.strokeStyle = '#ffffff';
+    signCtx.lineWidth = 6;
+    signCtx.strokeRect(6, 6, 500, 116);
+    signCtx.fillStyle = '#ffffff';
+    signCtx.font = 'bold 24px sans-serif';
+    signCtx.textAlign = 'center';
+    signCtx.fillText('WELCOME TO WATTLE CREEK', 256, 44);
+    signCtx.font = 'bold 16px sans-serif';
+    signCtx.fillStyle = '#fde047';
+    signCtx.fillText('HISTORIC VILLAGE • SPEED LIMIT 40 km/h', 256, 76);
+    signCtx.font = '13px sans-serif';
+    signCtx.fillStyle = '#e2e8f0';
+    signCtx.fillText('FOUNDED 1862 • POPULATION 520', 256, 104);
+    const shireSignTex = new THREE.CanvasTexture(signCvs);
+    const shireSignMesh = new THREE.Mesh(
+      new THREE.PlaneGeometry(8.5, 2.1),
+      new THREE.MeshStandardMaterial({ map: shireSignTex, roughness: 0.6 })
+    );
+    shireSignMesh.position.set(0, 4.0, 48);
+    gatewayGroup.add(shireSignMesh);
+
+    // Kangaroo Crossing warning sign at gateway
+    placeSign('kangaroo', 6.8, 52, Math.PI, 1.4);
+    worldGroup.add(gatewayGroup);
+
+    // (B) The Bushman's Rest Hotel (Est. 1888) at x = -16.5, z = 110
+    const pubGroup = new THREE.Group();
+    // Sandstone Ground Floor
+    const pubGroundWalls = new THREE.Mesh(
+      new THREE.BoxGeometry(16, 4.5, 14),
+      new THREE.MeshStandardMaterial({ color: 0xc49a6c, roughness: 0.9 })
+    );
+    pubGroundWalls.position.set(0, 2.25, 0);
+    pubGroundWalls.castShadow = true;
+    pubGroup.add(pubGroundWalls);
+
+    // Upper Floor Weatherboard
+    const pubUpperWalls = new THREE.Mesh(
+      new THREE.BoxGeometry(15.8, 3.8, 13.8),
+      new THREE.MeshStandardMaterial({ color: 0xe8d8c8, roughness: 0.8 })
+    );
+    pubUpperWalls.position.set(0, 6.4, 0);
+    pubUpperWalls.castShadow = true;
+    pubGroup.add(pubUpperWalls);
+
+    // Green Colorbond Hipped Roof
+    const pubRoof = new THREE.Mesh(
+      new THREE.ConeGeometry(13, 3.8, 4),
+      new THREE.MeshStandardMaterial({ color: 0x2d4a3e, roughness: 0.6 })
+    );
+    pubRoof.position.set(0, 10.2, 0);
+    pubRoof.rotation.y = Math.PI / 4;
+    pubRoof.castShadow = true;
+    pubGroup.add(pubRoof);
+
+    // 2-Story Verandah overhang extending towards street
+    const verandahFloor = new THREE.Mesh(
+      new THREE.BoxGeometry(17, 0.35, 4.5),
+      new THREE.MeshStandardMaterial({ color: 0x5c4033, roughness: 0.85 })
+    );
+    verandahFloor.position.set(0, 4.5, 8.5);
+    pubGroup.add(verandahFloor);
+
+    // Verandah roof
+    const verandahRoof = new THREE.Mesh(
+      new THREE.BoxGeometry(17.2, 0.25, 4.6),
+      new THREE.MeshStandardMaterial({ color: 0x2d4a3e, roughness: 0.6 })
+    );
+    verandahRoof.position.set(0, 8.2, 8.5);
+    pubGroup.add(verandahRoof);
+
+    // Verandah timber support posts
+    for (let px = -7.5; px <= 7.5; px += 3.75) {
+      const vPost = new THREE.Mesh(new THREE.BoxGeometry(0.2, 8.2, 0.2), timberPostMat);
+      vPost.position.set(px, 4.1, 10.6);
+      pubGroup.add(vPost);
+    }
+
+    // Pub sign board
+    const pubSignCvs = document.createElement('canvas');
+    pubSignCvs.width = 512; pubSignCvs.height = 96;
+    const pCtx = signCvs.getContext('2d')!;
+    pCtx.fillStyle = '#1c1917';
+    pCtx.fillRect(0, 0, 512, 96);
+    pCtx.fillStyle = '#fbbf24';
+    pCtx.font = 'bold 24px serif';
+    pCtx.textAlign = 'center';
+    pCtx.fillText("THE BUSHMAN'S REST HOTEL", 256, 42);
+    pCtx.font = '14px sans-serif';
+    pCtx.fillStyle = '#d6d3d1';
+    pCtx.fillText('ESTABLISHED 1888 • COLD BEER & MEALS', 256, 72);
+    const pubSignTex = new THREE.CanvasTexture(pubSignCvs);
+    const pubSignMesh = new THREE.Mesh(
+      new THREE.PlaneGeometry(7.2, 1.35),
+      new THREE.MeshBasicMaterial({ map: pubSignTex })
+    );
+    pubSignMesh.position.set(0, 8.9, 10.6);
+    pubGroup.add(pubSignMesh);
+
+    pubGroup.position.set(-16.5, 0, 110);
+    worldGroup.add(pubGroup);
+
+    // (C) Wattle Creek Country Bakery & Tearoom at x = 16.5, z = 110
+    const bakeryGroup = new THREE.Group();
+    const bakeryWalls = new THREE.Mesh(
+      new THREE.BoxGeometry(14, 4.5, 11),
+      new THREE.MeshStandardMaterial({ color: 0xfef08a, roughness: 0.8 })
+    );
+    bakeryWalls.position.set(0, 2.25, 0);
+    bakeryWalls.castShadow = true;
+    bakeryGroup.add(bakeryWalls);
+
+    const bakeryRoof = new THREE.Mesh(
+      new THREE.ConeGeometry(10.5, 3.2, 4),
+      new THREE.MeshStandardMaterial({ color: 0x991b1b, roughness: 0.6 })
+    );
+    bakeryRoof.position.set(0, 6.1, 0);
+    bakeryRoof.rotation.y = Math.PI / 4;
+    bakeryGroup.add(bakeryRoof);
+
+    // Red-and-white striped bakery awning
+    const bakeryAwning = new THREE.Mesh(
+      new THREE.BoxGeometry(12, 0.25, 2.8),
+      new THREE.MeshStandardMaterial({ color: 0xb91c1c, roughness: 0.7 })
+    );
+    bakeryAwning.position.set(0, 3.4, -6.8);
+    bakeryAwning.rotation.x = 0.2;
+    bakeryGroup.add(bakeryAwning);
+
+    // Outdoor timber picnic table on grass
+    const picnicTable = new THREE.Mesh(
+      new THREE.BoxGeometry(2.4, 0.85, 1.4),
+      new THREE.MeshStandardMaterial({ color: 0x78350f, roughness: 0.9 })
+    );
+    picnicTable.position.set(-2.5, 0.42, -9.5);
+    bakeryGroup.add(picnicTable);
+
+    bakeryGroup.position.set(16.5, 0, 110);
+    bakeryGroup.rotation.y = Math.PI;
+    worldGroup.add(bakeryGroup);
+
+    // (D) Historic General Store & Australia Post at x = -16.5, z = 160
+    const storeGroup = new THREE.Group();
+    const storeWalls = new THREE.Mesh(
+      new THREE.BoxGeometry(15, 4.8, 12),
+      new THREE.MeshStandardMaterial({ color: 0xd6d3d1, roughness: 0.85 })
+    );
+    storeWalls.position.set(0, 2.4, 0);
+    storeWalls.castShadow = true;
+    storeGroup.add(storeWalls);
+
+    const storeRoof = new THREE.Mesh(
+      new THREE.BoxGeometry(15.6, 2.4, 12.6),
+      new THREE.MeshStandardMaterial({ color: 0x334155, roughness: 0.6 })
+    );
+    storeRoof.position.set(0, 5.8, 0);
+    storeGroup.add(storeRoof);
+
+    // Red Australian Post pillar postbox on pavement
+    const postBox = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.3, 0.3, 1.4, 16),
+      new THREE.MeshStandardMaterial({ color: 0xdc2626, roughness: 0.5 })
+    );
+    postBox.position.set(4.5, 0.7, 7.5);
+    storeGroup.add(postBox);
+
+    storeGroup.position.set(-16.5, 0, 160);
+    worldGroup.add(storeGroup);
+
+    // (E) CFA Rural Fire Service Station at x = 16.5, z = 160
+    const cfaGroup = new THREE.Group();
+    const cfaWalls = new THREE.Mesh(
+      new THREE.BoxGeometry(15, 5.2, 12),
+      new THREE.MeshStandardMaterial({ color: 0xe2e8f0, roughness: 0.7 })
+    );
+    cfaWalls.position.set(0, 2.6, 0);
+    cfaWalls.castShadow = true;
+    cfaGroup.add(cfaWalls);
+
+    // CFA Bay 1 & Bay 2 Red Roller Doors
+    for (let dx = -3.5; dx <= 3.5; dx += 7.0) {
+      const door = new THREE.Mesh(
+        new THREE.PlaneGeometry(4.2, 3.8),
+        new THREE.MeshStandardMaterial({ color: 0xb91c1c, roughness: 0.5 })
+      );
+      door.position.set(dx, 1.9, -6.02);
+      cfaGroup.add(door);
+    }
+
+    // AFDRS Fire Danger Rating Board on roadside
+    const fdrBoard = new THREE.Mesh(
+      new THREE.BoxGeometry(2.5, 1.8, 0.2),
+      new THREE.MeshStandardMaterial({ color: 0xf59e0b, roughness: 0.6 })
+    );
+    fdrBoard.position.set(7.5, 1.6, -8.5);
+    cfaGroup.add(fdrBoard);
+
+    cfaGroup.position.set(16.5, 0, 160);
+    cfaGroup.rotation.y = Math.PI;
+    worldGroup.add(cfaGroup);
+
+    // (F) Village Hall & Courthouse at x = -16.5, z = 200
+    const hallGroup = new THREE.Group();
+    const hallWalls = new THREE.Mesh(
+      new THREE.BoxGeometry(16, 6.0, 13),
+      new THREE.MeshStandardMaterial({ color: 0xf1f5f9, roughness: 0.7 })
+    );
+    hallWalls.position.set(0, 3.0, 0);
+    hallWalls.castShadow = true;
+    hallGroup.add(hallWalls);
+
+    const hallRoof = new THREE.Mesh(
+      new THREE.BoxGeometry(16.5, 2.5, 13.5),
+      new THREE.MeshStandardMaterial({ color: 0x1e3a5f, roughness: 0.6 })
+    );
+    hallRoof.position.set(0, 7.2, 0);
+    hallGroup.add(hallRoof);
+
+    // Clock pediment
+    const clock = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.7, 0.7, 0.3, 16),
+      new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.3 })
+    );
+    clock.rotation.x = Math.PI / 2;
+    clock.position.set(0, 8.4, 6.8);
+    hallGroup.add(clock);
+
+    hallGroup.position.set(-16.5, 0, 200);
+    worldGroup.add(hallGroup);
+
+    // (G) THE VILLAGE GREEN & SOUTHERN CROSS WINDMILL (z = 240, x = 0)
+    const villageGreenGroup = new THREE.Group();
+
+    // 1. Australian Southern Cross Windmill (Center of Island, x = 0, z = 240)
+    const windmillGroup = new THREE.Group();
+    const steelMat = new THREE.MeshStandardMaterial({ color: 0x94a3b8, metalness: 0.8, roughness: 0.4 });
+    // 4 lattice legs
+    const legGeo = new THREE.CylinderGeometry(0.06, 0.1, 11, 6);
+    [[-1.2, -1.2], [1.2, -1.2], [-1.2, 1.2], [1.2, 1.2]].forEach(([lx, lz]) => {
+      const leg = new THREE.Mesh(legGeo, steelMat);
+      leg.position.set(lx * 0.7, 5.5, lz * 0.7);
+      leg.rotation.x = lz * 0.06;
+      leg.rotation.z = -lx * 0.06;
+      windmillGroup.add(leg);
+    });
+
+    // Cross bracing rings
+    for (let hy = 2.5; hy <= 10.5; hy += 2.6) {
+      const rScale = 1.6 * (1 - (hy / 15));
+      const strut = new THREE.Mesh(new THREE.BoxGeometry(rScale * 1.8, 0.08, rScale * 1.8), steelMat);
+      strut.position.y = hy;
+      windmillGroup.add(strut);
+    }
+
+    // Gearbox Head
+    const gearHead = new THREE.Mesh(new THREE.BoxGeometry(0.6, 0.6, 0.8), steelMat);
+    gearHead.position.set(0, 11.2, 0);
+    windmillGroup.add(gearHead);
+
+    // Directional Tail Vane (Points downwind)
+    const tailBoom = new THREE.Mesh(new THREE.CylinderGeometry(0.04, 0.04, 2.8, 6), steelMat);
+    tailBoom.rotation.x = Math.PI / 2;
+    tailBoom.position.set(0, 11.2, 1.4);
+    windmillGroup.add(tailBoom);
+
+    const tailFin = new THREE.Mesh(
+      new THREE.BoxGeometry(0.05, 0.85, 1.4),
+      new THREE.MeshStandardMaterial({ color: 0xdc2626, roughness: 0.6 })
+    );
+    tailFin.position.set(0, 11.2, 2.5);
+    windmillGroup.add(tailFin);
+
+    // Animated Windmill Multi-Blade Wheel
+    windmillFanMesh = new THREE.Group();
+    const hub = new THREE.Mesh(new THREE.CylinderGeometry(0.25, 0.25, 0.2, 12), steelMat);
+    hub.rotation.x = Math.PI / 2;
+    windmillFanMesh.add(hub);
+
+    // 16 Galvanized curved fan blades
+    for (let i = 0; i < 16; i++) {
+      const angle = (i * Math.PI * 2) / 16;
+      const blade = new THREE.Mesh(
+        new THREE.BoxGeometry(0.18, 1.4, 0.03),
+        steelMat
+      );
+      blade.position.set(Math.cos(angle) * 0.85, Math.sin(angle) * 0.85, 0);
+      blade.rotation.z = angle + 0.3;
+      windmillFanMesh.add(blade);
+    }
+    // Outer stabilizing ring
+    const outerFanRing = new THREE.Mesh(
+      new THREE.TorusGeometry(1.5, 0.03, 8, 24),
+      steelMat
+    );
+    windmillFanMesh.add(outerFanRing);
+
+    windmillFanMesh.position.set(0, 11.2, -0.45);
+    windmillGroup.add(windmillFanMesh);
+    villageGreenGroup.add(windmillGroup);
+
+    // 2. Country Gazebo / Bandstand (x = -4.5, z = 0 relative to island)
+    const bandstandGroup = new THREE.Group();
+    const bsFloor = new THREE.Mesh(
+      new THREE.CylinderGeometry(2.8, 2.8, 0.4, 8),
+      new THREE.MeshStandardMaterial({ color: 0x5c4033, roughness: 0.8 })
+    );
+    bsFloor.position.y = 0.2;
+    bandstandGroup.add(bsFloor);
+
+    // 8 white timber posts
+    for (let i = 0; i < 8; i++) {
+      const ba = (i * Math.PI * 2) / 8;
+      const bp = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.08, 0.08, 2.4, 8),
+        new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.6 })
+      );
+      bp.position.set(Math.cos(ba) * 2.5, 1.4, Math.sin(ba) * 2.5);
+      bandstandGroup.add(bp);
+    }
+
+    // Green conical octagonal roof
+    const bsRoof = new THREE.Mesh(
+      new THREE.ConeGeometry(3.2, 1.8, 8),
+      new THREE.MeshStandardMaterial({ color: 0x14532d, roughness: 0.6 })
+    );
+    bsRoof.position.y = 3.4;
+    bandstandGroup.add(bsRoof);
+    bandstandGroup.position.set(-4.5, 0, 0);
+    villageGreenGroup.add(bandstandGroup);
+
+    // 3. Memorial Stone Fountain (x = 4.5, z = 0)
+    const fountainPlinth = new THREE.Mesh(
+      new THREE.CylinderGeometry(1.2, 1.4, 1.2, 12),
+      new THREE.MeshStandardMaterial({ color: 0x94a3b8, roughness: 0.9 })
+    );
+    fountainPlinth.position.set(4.5, 0.6, 0);
+    villageGreenGroup.add(fountainPlinth);
+
+    // Weeping gum tree on the green
+    const greenTree = new THREE.Group();
+    const gTrunk = new THREE.Mesh(
+      new THREE.CylinderGeometry(0.3, 0.45, 6, 8),
+      new THREE.MeshStandardMaterial({ color: 0xd4c5b9, roughness: 0.9 })
+    );
+    gTrunk.position.y = 3;
+    greenTree.add(gTrunk);
+    const gCanopy = new THREE.Mesh(
+      new THREE.DodecahedronGeometry(3.2, 1),
+      new THREE.MeshStandardMaterial({ color: 0x4d7c0f, roughness: 0.8 })
+    );
+    gCanopy.position.y = 6.2;
+    greenTree.add(gCanopy);
+    greenTree.position.set(0, 0, -4.5);
+    villageGreenGroup.add(greenTree);
+
+    villageGreenGroup.position.set(0, 0, VILLAGE_ROUNDABOUT_Z);
+    worldGroup.add(villageGreenGroup);
+
+    // (H) EAST FARMSTEAD COUNTRY LANE SCENERY (x = 35 to 135, z = 250 to -40)
+    const farmGroup = new THREE.Group();
+
+    // 1. Cattle Grid Crossing at x = 50, z = 240
+    const gridBed = new THREE.Mesh(
+      new THREE.BoxGeometry(6, 0.1, 7.8),
+      new THREE.MeshStandardMaterial({ color: 0x475569, metalness: 0.7, roughness: 0.5 })
+    );
+    gridBed.position.set(50, 0.06, 240);
+    farmGroup.add(gridBed);
+
+    // Steel grid transverse rails
+    for (let rx = 47.5; rx <= 52.5; rx += 0.5) {
+      const rail = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.04, 0.04, 7.8, 6),
+        new THREE.MeshStandardMaterial({ color: 0x94a3b8, metalness: 0.9 })
+      );
+      rail.rotation.x = Math.PI / 2;
+      rail.position.set(rx, 0.12, 240);
+      farmGroup.add(rail);
+    }
+
+    // 4 Black & White Hazard guideposts at corners of Cattle Grid
+    [[-3.2, -4.1], [3.2, -4.1], [-3.2, 4.1], [3.2, 4.1]].forEach(([gx, gz]) => {
+      const gp = new THREE.Mesh(
+        new THREE.BoxGeometry(0.12, 1.3, 0.12),
+        new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.5 })
+      );
+      gp.position.set(50 + gx, 0.65, 240 + gz);
+      farmGroup.add(gp);
+    });
+
+    // 2. Classic Red Rural Timber Barn at x = 75, z = 265
+    const barnWalls = new THREE.Mesh(
+      new THREE.BoxGeometry(18, 7.5, 14),
+      new THREE.MeshStandardMaterial({ color: 0x991b1b, roughness: 0.85 })
+    );
+    barnWalls.position.set(75, 3.75, 265);
+    barnWalls.castShadow = true;
+    farmGroup.add(barnWalls);
+
+    const barnRoof = new THREE.Mesh(
+      new THREE.ConeGeometry(13.5, 4.8, 4),
+      new THREE.MeshStandardMaterial({ color: 0x475569, roughness: 0.6 })
+    );
+    barnRoof.position.set(75, 9.8, 265);
+    barnRoof.rotation.y = Math.PI / 4;
+    barnRoof.castShadow = true;
+    farmGroup.add(barnRoof);
+
+    // 3. Tractor Shed & 3D Farm Tractor at x = 105, z = 265
+    const shedRoof = new THREE.Mesh(
+      new THREE.BoxGeometry(12, 0.35, 9),
+      new THREE.MeshStandardMaterial({ color: 0x64748b, roughness: 0.6 })
+    );
+    shedRoof.position.set(105, 4.5, 265);
+    farmGroup.add(shedRoof);
+    for (let sx = -5; sx <= 5; sx += 10) {
+      for (let sz = -3.8; sz <= 3.8; sz += 7.6) {
+        const sPost = new THREE.Mesh(new THREE.CylinderGeometry(0.12, 0.12, 4.5, 8), timberPostMat);
+        sPost.position.set(105 + sx, 2.25, 265 + sz);
+        farmGroup.add(sPost);
+      }
+    }
+
+    // 3D Green Farm Tractor parked inside
+    const tractorGroup = new THREE.Group();
+    // Green Body
+    const tBody = new THREE.Mesh(
+      new THREE.BoxGeometry(2.0, 1.4, 3.4),
+      new THREE.MeshStandardMaterial({ color: 0x15803d, roughness: 0.5 })
+    );
+    tBody.position.y = 1.4;
+    tractorGroup.add(tBody);
+    // Yellow Hubs & Big Rear Tyres
+    const tyreMat = new THREE.MeshStandardMaterial({ color: 0x1c1917, roughness: 0.9 });
+    const hubMat = new THREE.MeshStandardMaterial({ color: 0xfacc15, roughness: 0.4 });
+    const rearTyreGeo = new THREE.CylinderGeometry(0.85, 0.85, 0.55, 16);
+    const rearL = new THREE.Mesh(rearTyreGeo, tyreMat);
+    rearL.rotation.z = Math.PI / 2;
+    rearL.position.set(-1.25, 0.85, 0.9);
+    tractorGroup.add(rearL);
+    const rearR = rearL.clone();
+    rearR.position.x = 1.25;
+    tractorGroup.add(rearR);
+
+    // Front Steer Tyres
+    const frontTyreGeo = new THREE.CylinderGeometry(0.48, 0.48, 0.35, 16);
+    const frontL = new THREE.Mesh(frontTyreGeo, tyreMat);
+    frontL.rotation.z = Math.PI / 2;
+    frontL.position.set(-1.1, 0.48, -1.2);
+    tractorGroup.add(frontL);
+    const frontR = frontL.clone();
+    frontR.position.x = 1.1;
+    tractorGroup.add(frontR);
+
+    // Vertical Exhaust Pipe
+    const exhaust = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.05, 1.4, 8), steelMat);
+    exhaust.position.set(0.65, 2.6, -1.0);
+    tractorGroup.add(exhaust);
+
+    tractorGroup.position.set(105, 0, 265);
+    farmGroup.add(tractorGroup);
+
+    // 4. Golden Cylindrical Hay Bales in the Paddock
+    const hayMat = new THREE.MeshStandardMaterial({ color: 0xca8a04, roughness: 0.95 });
+    const hayGeo = new THREE.CylinderGeometry(0.95, 0.95, 1.8, 16);
+    const hayPositions = [
+      [68, 225], [78, 222], [88, 228], [94, 218],
+      [112, 195], [116, 175], [108, 145], [114, 115]
+    ];
+    hayPositions.forEach(([hx, hz], hidx) => {
+      const bale = new THREE.Mesh(hayGeo, hayMat);
+      bale.rotation.z = Math.PI / 2;
+      bale.rotation.y = hidx * 0.4;
+      bale.position.set(hx, 0.95, hz);
+      bale.castShadow = true;
+      farmGroup.add(bale);
+    });
+
+    // 5. Galvanized Corrugated Iron Rainwater Tanks
+    const tankMat = new THREE.MeshStandardMaterial({ color: 0x94a3b8, metalness: 0.6, roughness: 0.4 });
+    const tank1 = new THREE.Mesh(new THREE.CylinderGeometry(2.0, 2.0, 3.2, 20), tankMat);
+    tank1.position.set(87, 1.6, 268);
+    tank1.castShadow = true;
+    farmGroup.add(tank1);
+
+    // 6. Kangaroos in the Paddock at x = 92, z = 215
+    const rooMat = new THREE.MeshStandardMaterial({ color: 0x854d0e, roughness: 0.9 });
+    const createKangaroo = (kx: number, kz: number, ry: number) => {
+      const roo = new THREE.Group();
+      // Body
+      const body = new THREE.Mesh(new THREE.ConeGeometry(0.35, 1.1, 8), rooMat);
+      body.rotation.x = -0.3;
+      body.position.set(0, 0.65, 0);
+      roo.add(body);
+      // Head & Ears
+      const head = new THREE.Mesh(new THREE.SphereGeometry(0.2, 8, 8), rooMat);
+      head.position.set(0, 1.25, -0.2);
+      roo.add(head);
+      const earL = new THREE.Mesh(new THREE.ConeGeometry(0.06, 0.22, 6), rooMat);
+      earL.position.set(-0.1, 1.45, -0.2);
+      roo.add(earL);
+      const earR = earL.clone();
+      earR.position.x = 0.1;
+      roo.add(earR);
+      // Tail
+      const tail = new THREE.Mesh(new THREE.CylinderGeometry(0.08, 0.16, 0.9, 8), rooMat);
+      tail.rotation.x = 0.7;
+      tail.position.set(0, 0.35, 0.45);
+      roo.add(tail);
+
+      roo.position.set(kx, 0, kz);
+      roo.rotation.y = ry;
+      return roo;
+    };
+    farmGroup.add(createKangaroo(92, 215, -0.6));
+    farmGroup.add(createKangaroo(95, 218, 0.8));
+    farmGroup.add(createKangaroo(89, 212, -1.8));
+
+    // 7. White Rural Guideposts with Reflectors along Farm Lane
+    const postGeo = new THREE.BoxGeometry(0.12, 1.1, 0.06);
+    const postMat = new THREE.MeshStandardMaterial({ color: 0xf8fafc, roughness: 0.6 });
+    for (let z = 230; z >= -30; z -= 25) {
+      // Left guidepost (Red reflector)
+      const pL = new THREE.Mesh(postGeo, postMat);
+      pL.position.set(125 - 4.8, 0.55, z);
+      farmGroup.add(pL);
+      // Right guidepost (White reflector)
+      const pR = new THREE.Mesh(postGeo, postMat);
+      pR.position.set(125 + 4.8, 0.55, z);
+      farmGroup.add(pR);
+    }
+
+    worldGroup.add(farmGroup);
+
     // ==========================================
     // 8. REALISTIC AUSTRALIAN STREET LIGHTS & ROAD LIGHTING NETWORK
     // ==========================================
     const poleMat = new THREE.MeshStandardMaterial({ color: 0x475569, metalness: 0.75, roughness: 0.35 });
     const lampHousingMat = new THREE.MeshStandardMaterial({ color: 0x1e293b, roughness: 0.6 });
     const streetBulbMat = new THREE.MeshStandardMaterial({
-      color: isNightMode ? 0xfff3c4 : 0xd1d5db,
-      emissive: isNightMode ? 0xffe070 : 0x000000,
-      emissiveIntensity: isNightMode ? 4.2 : 0.0,
+      color: isLowLight ? 0xfff3c4 : 0xd1d5db,
+      emissive: isLowLight ? 0xffe070 : 0x000000,
+      emissiveIntensity: isLowLight ? 4.2 : 0.0,
       roughness: 0.1
     });
 
@@ -1281,7 +2237,7 @@ export const ThreeCanvas: React.FC<ThreeCanvasProps> = ({
       bulb.position.set(armDir * 2.3, 8.16, 0);
       lampGroup.add(bulb);
 
-      if (isNightMode) {
+      if (isLowLight) {
         // Targeted Road Light Source illuminating the road
         const light = new THREE.PointLight(0xfff1b8, 2.6, 38, 1.3);
         light.position.set(armDir * 2.3, 8.1, 0);
@@ -1727,7 +2683,7 @@ export const ThreeCanvas: React.FC<ThreeCanvasProps> = ({
     carGroup.add(headLightR);
 
     // Dynamic Headlight Spotlights
-    const headSpotL = new THREE.SpotLight(0xffffff, isNightMode ? 5 : 0, 60, Math.PI / 6, 0.4, 1.2);
+    const headSpotL = new THREE.SpotLight(0xffffff, isLowLight ? 5 : 0, 60, Math.PI / 6, 0.4, 1.2);
     headSpotL.position.set(-0.65, 0.65, -2.2);
     headSpotL.target.position.set(-0.65, 0, -25);
     carGroup.add(headSpotL);
@@ -1739,11 +2695,11 @@ export const ThreeCanvas: React.FC<ThreeCanvasProps> = ({
     carGroup.add(headSpotR);
     carGroup.add(headSpotR.target);
 
-    // Projected Headlight Road Light Pool (brightens the asphalt directly ahead of the vehicle in night vision)
+    // Projected Headlight Road Light Pool (brightens the asphalt directly ahead of the vehicle in low light)
     const roadPoolMat = new THREE.MeshBasicMaterial({
       color: 0xfffae0,
       transparent: true,
-      opacity: isNightMode ? 0.28 : 0.0,
+      opacity: isLowLight ? 0.28 : 0.0,
       depthWrite: false,
       blending: THREE.AdditiveBlending
     });
@@ -1910,11 +2866,11 @@ export const ThreeCanvas: React.FC<ThreeCanvasProps> = ({
         headLightMat.emissiveIntensity = 0.8;
         roadPoolOpacity = 0.14;
       } else {
-        spotIntensity = isNightMode ? 2.5 : 0;
+        spotIntensity = isLowLight ? 2.5 : 0;
         spotDistance = 45;
-        headLightMat.emissive.setHex(isNightMode ? 0xffffff : 0x222222);
-        headLightMat.emissiveIntensity = isNightMode ? 0.6 : 0.1;
-        roadPoolOpacity = isNightMode ? 0.22 : 0;
+        headLightMat.emissive.setHex(isLowLight ? 0xffffff : 0x222222);
+        headLightMat.emissiveIntensity = isLowLight ? 0.6 : 0.1;
+        roadPoolOpacity = isLowLight ? 0.22 : 0;
       }
       headSpotL.intensity = spotIntensity;
       headSpotR.intensity = spotIntensity;
@@ -1984,31 +2940,60 @@ export const ThreeCanvas: React.FC<ThreeCanvasProps> = ({
       let z = cur.z + dz;
 
       // 3. Collision Detection & Kerb Check
-      // Calculate whether the vehicle is on drivable asphalt:
-      // - Main road: |x| <= 4.8 (widens to 6.4m in multi-lane zone z between -230 and -285)
-      // - Bus stop bay: x between -6.8 and 4.8, z between -175 and -205
-      // - Branch cross street at z = -270: |x| <= 85.0 && |z - (-270)| <= 5.2
-      // - Roundabout at z = -345: hypot(x, z - (-345)) <= 16.8 && hypot(x, z - (-345)) >= 6.8
-      // - Cross street at z = -360: x between -5.0 and 70.0 && |z - (-360)| <= 5.2
-      const onMainRoad = (z >= -285 && z <= -230) ? Math.abs(x) <= 6.4 : Math.abs(x) <= 4.8;
-      const onBusBay = x >= -6.8 && x <= 4.8 && z >= -205 && z <= -175;
-      const onBranchStreet = Math.abs(x) <= 85.0 && Math.abs(z - (-270)) <= 5.2;
-      const onRoundabout = (Math.hypot(x, z - (-345)) <= 16.8 && Math.hypot(x, z - (-345)) >= 6.8);
-      const onCrossParkingStreet = x >= -5.0 && x <= 70.0 && Math.abs(z - (-360)) <= 5.2;
+      // Calculate whether the vehicle is on drivable asphalt with comfortable, realistic margins:
+      const onNorthHighway = z >= -258 && z <= 48 && Math.abs(x) <= 6.0;
+      const onBusBay = x >= -8.2 && x <= 6.0 && z >= -208 && z <= -172;
+      const onIntersection270 = Math.abs(x) <= 12.5 && Math.abs(z - (-270)) <= 14.5;
+      const onTurnFillet270 = x >= -16.0 && x <= 2.0 && z >= -284 && z <= -256;
+      const onWestCivicBranch = x <= 0.0 && x >= -95.0 && Math.abs(z - (-270)) <= 7.2;
+      const onEastCommerceBranch = x >= 0.0 && x <= 95.0 && Math.abs(z - (-270)) <= 7.2;
+      const onApproachToRoundabout = z >= -332 && z <= -278 && Math.abs(x) <= 8.5;
+      const distToRoundabout = Math.hypot(x, z - (-345));
+      const onRoundabout = distToRoundabout <= 20.2 && distToRoundabout >= 5.0;
+      const onRoundaboutWestExit = x <= -10.0 && x >= -92.0 && Math.abs(z - (-345)) <= 7.2;
+      const onRoundaboutEastExit = x >= 10.0 && x <= 92.0 && Math.abs(z - (-345)) <= 7.2;
+      const onSouthRoad = z <= -355 && z >= -475 && Math.abs(x) <= 6.0;
+      const onCrossParkingStreet = x >= -8.0 && x <= 85.0 && Math.abs(z - (-360)) <= 6.5;
 
-      const isDrivableRoad = onMainRoad || onBusBay || onBranchStreet || onRoundabout || onCrossParkingStreet;
+      // Wattle Creek Historic Village & Country Farmstead Network Drivability:
+      const onVillageHighStreet = z >= 35 && z <= 232 && Math.abs(x) <= 6.0;
+      const distToVillageGreen = Math.hypot(x, z - VILLAGE_ROUNDABOUT_Z);
+      const onVillageGreenRoundabout = distToVillageGreen <= 22.0 && distToVillageGreen >= 8.5;
+      const onVillageGreenPads = (z >= 215 && z <= 265 && Math.abs(x) <= 8.5);
+      const onFarmsteadEastLane = x >= 10.0 && x <= 140.0 && Math.abs(z - 240) <= 6.0;
+      const onFarmsteadSouthLane = z <= 252.0 && z >= -52.0 && Math.abs(x - 125) <= 6.0;
+      const onFarmsteadReturnLane = x >= -5.0 && x <= 140.0 && Math.abs(z - (-40)) <= 6.0;
+      const onOrchardWestLane = x <= -10.0 && x >= -98.0 && Math.abs(z - 240) <= 6.0;
+      const onOrchardSouthLane = z <= 252.0 && z >= -282.0 && Math.abs(x - (-85)) <= 6.0;
+
+      const isDrivableRoad = onNorthHighway || onBusBay || onIntersection270 || onTurnFillet270 ||
+        onWestCivicBranch || onEastCommerceBranch || onApproachToRoundabout ||
+        onRoundabout || onRoundaboutWestExit || onRoundaboutEastExit ||
+        onSouthRoad || onCrossParkingStreet ||
+        onVillageHighStreet || onVillageGreenRoundabout || onVillageGreenPads ||
+        onFarmsteadEastLane || onFarmsteadSouthLane || onFarmsteadReturnLane ||
+        onOrchardWestLane || onOrchardSouthLane;
       const isOffroad = !isDrivableRoad;
-      if (isOffroad && !cur.isColliding) {
-        soundManager.playKerbCollision();
-        if (onKerbCollision) onKerbCollision();
+
+      if (isOffroad) {
+        offroadDurationRef.current += delta;
+        // Sustained offroad (>0.38s) or high speed (>12 km/h) constitutes true kerb mounting
+        if ((offroadDurationRef.current > 0.38 || Math.abs(speedKmh) > 12) && !cur.isColliding) {
+          cur.isColliding = true;
+          soundManager.playKerbCollision();
+          if (onKerbCollisionRef.current) onKerbCollisionRef.current();
+        }
+      } else {
+        offroadDurationRef.current = 0;
+        cur.isColliding = false;
       }
 
       // Check Stop Sign halt: at z between -280 and -290
       if (z < -280 && z > -290 && Math.abs(x) < 4.5) {
         if (Math.abs(speedKmh) < 0.5) {
           stopSignTimerRef.current += delta;
-          if (stopSignTimerRef.current >= 3.0 && onStopSignHalt) {
-            onStopSignHalt(stopSignTimerRef.current);
+          if (stopSignTimerRef.current >= 3.0 && onStopSignHaltRef.current) {
+            onStopSignHaltRef.current(stopSignTimerRef.current);
           }
         } else {
           stopSignTimerRef.current = 0;
@@ -2019,26 +3004,27 @@ export const ThreeCanvas: React.FC<ThreeCanvasProps> = ({
       if (z < -135 && z > -145 && Math.abs(x) < 4.0) {
         if (Math.abs(speedKmh) < 1.0) {
           zebraTimerRef.current += delta;
-          if (zebraTimerRef.current >= 1.5 && onZebraStop) {
-            onZebraStop();
+          if (zebraTimerRef.current >= 1.5 && onZebraStopRef.current) {
+            onZebraStopRef.current();
           }
         }
       }
 
       // Check Roundabout entrance: z ~ -330
-      if (z < -325 && z > -335 && onRoundaboutEnter) {
-        onRoundaboutEnter();
+      if (z < -325 && z > -335 && onRoundaboutEnterRef.current) {
+        onRoundaboutEnterRef.current();
       }
 
       // Check Parallel Park Bay: x near 45, z near -360 - ROAD_WIDTH/2 + 1.3
-      if (x > 38 && x < 50 && z < -362 && z > -368 && onParkAlignCheck) {
+      if (x > 38 && x < 50 && z < -362 && z > -368 && onParkAlignCheckRef.current) {
         const kerbDist = Math.abs(z - (-364.5));
         const angleDiff = Math.abs(Math.sin(rotation - Math.PI / 2));
-        onParkAlignCheck(kerbDist, angleDiff);
+        onParkAlignCheckRef.current(kerbDist, angleDiff);
       }
 
-      // Active Lane Discipline Checking in City Multi-Lane Section (z between -235 and -275)
-      if (z >= -275 && z <= -235) {
+      // Active Lane Discipline Checking in City Approach (z between -235 and -263)
+      // Only active on approach BEFORE the intersection line to allow smooth turns
+      if (z >= -263 && z <= -235) {
         const inRightTurnLane = x > 0.05 && x < 3.2;
         const inLeftTurnLane = x < -2.45 && x > -5.2;
         const inCenterLane = x >= -2.45 && x <= 0.05;
@@ -2048,11 +3034,10 @@ export const ThreeCanvas: React.FC<ThreeCanvasProps> = ({
           // Under ARR Rule 32, right-turn lane MUST turn right. If driver steers left:
           if (cur.steering < -0.22 && (now - lastLaneAlertTimeRef.current > 4000)) {
             lastLaneAlertTimeRef.current = now;
-            soundManager.playKerbCollision();
             if (onLaneDisciplineAlertRef.current) {
               onLaneDisciplineAlertRef.current({
                 type: 'wrong_turn_lane',
-                message: 'LANE DISCIPLINE INFRACTION: Cannot turn left from marked Right-Turn lane! (ARR Rule 32: Starting a right turn from a multi-lane road).',
+                message: 'LANE DISCIPLINE: Cannot turn left from marked Right-Turn lane! (ARR Rule 32).',
                 ruleRef: 'ARR Rule 32'
               });
             }
@@ -2061,11 +3046,10 @@ export const ThreeCanvas: React.FC<ThreeCanvasProps> = ({
           // Under ARR Rule 28, left-turn lane MUST turn left. If driver steers right:
           if (cur.steering > 0.22 && (now - lastLaneAlertTimeRef.current > 4000)) {
             lastLaneAlertTimeRef.current = now;
-            soundManager.playKerbCollision();
             if (onLaneDisciplineAlertRef.current) {
               onLaneDisciplineAlertRef.current({
                 type: 'wrong_turn_lane',
-                message: 'LANE DISCIPLINE INFRACTION: Cannot turn right from marked Left-Turn lane! (ARR Rule 28: Starting a left turn from a multi-lane road).',
+                message: 'LANE DISCIPLINE: Cannot turn right from marked Left-Turn lane! (ARR Rule 28).',
                 ruleRef: 'ARR Rule 28'
               });
             }
@@ -2077,11 +3061,10 @@ export const ThreeCanvas: React.FC<ThreeCanvasProps> = ({
         if (lastLaneZoneRef.current === 'right' && currentLaneZone === 'center') {
           if (now - lastLaneAlertTimeRef.current > 4000) {
             lastLaneAlertTimeRef.current = now;
-            soundManager.playKerbCollision();
             if (onLaneDisciplineAlertRef.current) {
               onLaneDisciplineAlertRef.current({
                 type: 'solid_line_cross',
-                message: 'SOLID LINE INFRACTION: You crossed a continuous solid line separating lanes (ARR Rule 147: Moving from one marked lane to another over continuous line).',
+                message: 'SOLID LINE: You crossed a continuous solid line separating lanes (ARR Rule 147).',
                 ruleRef: 'ARR Rule 147'
               });
             }
@@ -2117,8 +3100,13 @@ export const ThreeCanvas: React.FC<ThreeCanvasProps> = ({
       soundManager.updateEngineSound(speedKmh, rpm, cur.throttle);
 
       // Notify parent of speed
-      if (onSpeedCheck && Math.abs(speedKmh) > 0) {
-        onSpeedCheck(Math.abs(speedKmh));
+      if (onSpeedCheckRef.current && Math.abs(speedKmh) > 0) {
+        onSpeedCheckRef.current(Math.abs(speedKmh));
+      }
+
+      // Animate Southern Cross Windmill blades on Village Green
+      if (windmillFanMesh) {
+        windmillFanMesh.rotation.z += 1.6 * delta;
       }
 
       // Animate Pedestrian walking across zebra
@@ -2276,6 +3264,45 @@ export const ThreeCanvas: React.FC<ThreeCanvasProps> = ({
         onCarScreenPosUpdateRef.current({ x: screenX, y: screenY, isVisible });
       }
 
+      // 5.5 Animate Dynamic Flowing Navigational Road Arrows
+      const arrowTime = time * 0.0035;
+      animatedRoadArrows.forEach((arr) => {
+        const wave = Math.sin(arrowTime * 3.2 - arr.seqIndex * 0.35);
+        const norm = (wave + 1) * 0.5; // 0 to 1
+        arr.mat.opacity = 0.35 + 0.65 * norm;
+        const scale = 0.94 + 0.16 * norm;
+        arr.mesh.scale.set(scale, scale, 1);
+      });
+
+      // 5.6 Animate Dynamic Rain Falling Streaks
+      if (rainLines && rainPositions && rainVelocities) {
+        const rainGeo = rainLines.geometry;
+        for (let i = 0; i < rainCount; i++) {
+          const spd = rainVelocities[i];
+          rainPositions[i * 6 + 1] -= spd * delta;
+          rainPositions[i * 6 + 4] -= spd * delta;
+          if (rainPositions[i * 6 + 1] < 0.1) {
+            const rx = x + (Math.random() - 0.5) * 80;
+            const rz = z + (Math.random() - 0.5) * 80;
+            const ry = 25 + Math.random() * 8;
+            rainPositions[i * 6] = rx;
+            rainPositions[i * 6 + 1] = ry;
+            rainPositions[i * 6 + 2] = rz;
+            rainPositions[i * 6 + 3] = rx - 0.12;
+            rainPositions[i * 6 + 4] = ry - 1.1;
+            rainPositions[i * 6 + 5] = rz;
+          }
+        }
+        rainGeo.attributes.position.needsUpdate = true;
+      }
+
+      // 5.7 Animate School Zone Twin Amber Flashing Beacons
+      if (schoolBeaconMat1 && schoolBeaconMat2) {
+        const beaconPhase = Math.floor(time * 0.003) % 2;
+        schoolBeaconMat1.color.setHex(beaconPhase === 0 ? 0xffb703 : 0x332200);
+        schoolBeaconMat2.color.setHex(beaconPhase === 1 ? 0xffb703 : 0x332200);
+      }
+
       // 6. Update AI Traffic & Hazard Reactions
       if (trafficManagerRef.current) {
         const trafficResult = trafficManagerRef.current.update(delta, {
@@ -2321,6 +3348,10 @@ export const ThreeCanvas: React.FC<ThreeCanvasProps> = ({
       renderer.render(scene, camera);
     };
 
+    if (effectiveEnv === 'rainy_wet') {
+      soundManager.startRainAmbience();
+    }
+
     animFrameId = requestAnimationFrame(animate);
 
     // Resize Handler
@@ -2338,6 +3369,7 @@ export const ThreeCanvas: React.FC<ThreeCanvasProps> = ({
     return () => {
       cancelAnimationFrame(animFrameId);
       window.removeEventListener('resize', handleResize);
+      soundManager.stopRainAmbience();
       if (trafficManagerRef.current) {
         trafficManagerRef.current.dispose();
         trafficManagerRef.current = null;
@@ -2347,7 +3379,7 @@ export const ThreeCanvas: React.FC<ThreeCanvasProps> = ({
       }
       renderer.dispose();
     };
-  }, [cameraView, isNightMode, setVehicleState]);
+  }, [cameraView, isNightMode, environment, setVehicleState]);
 
   // Sync hazard state dynamically with the AI traffic manager
   useEffect(() => {

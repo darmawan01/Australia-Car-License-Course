@@ -67,11 +67,11 @@ export const LevelSelectModal: React.FC<LevelSelectModalProps> = ({
             <div className="hidden sm:flex items-center gap-3 bg-slate-950 px-3 py-1.5 rounded-xl border border-slate-800 text-xs">
               <div className="flex items-center gap-1 text-amber-400 font-bold">
                 <Star className="w-3.5 h-3.5 fill-amber-400 text-amber-400" />
-                <span>{totalStars} / 33 Stars</span>
+                <span>{totalStars} / {DRIVING_LEVELS.length * 3} Stars</span>
               </div>
               <div className="w-px h-3 bg-slate-700" />
               <div className="text-slate-300 font-semibold">
-                {totalCompleted} / 11 Complete
+                {totalCompleted} / {DRIVING_LEVELS.length} Complete
               </div>
             </div>
 
@@ -188,6 +188,21 @@ export const LevelSelectModal: React.FC<LevelSelectModalProps> = ({
                     <p className="text-xs text-slate-400 max-w-2xl leading-relaxed">
                       {lvl.description}
                     </p>
+
+                    {/* Course Driving Situation Pill */}
+                    {lvl.situation && (
+                      <div className="pt-1 flex flex-wrap items-center gap-2 text-[10px]">
+                        <span className="px-2 py-0.5 rounded-md bg-slate-800/90 text-amber-300 font-semibold border border-amber-500/30 flex items-center gap-1">
+                          <span>{lvl.situation.timeLabel}</span>
+                        </span>
+                        <span className="px-2 py-0.5 rounded-md bg-slate-800/90 text-cyan-300 font-semibold border border-cyan-500/30 flex items-center gap-1">
+                          <span>{lvl.situation.weatherLabel}</span>
+                        </span>
+                        <span className="px-2 py-0.5 rounded-md bg-slate-800/90 text-slate-300 font-medium border border-slate-700">
+                          Traffic: {lvl.situation.trafficDensity}
+                        </span>
+                      </div>
+                    )}
 
                     {/* Objectives Checklist */}
                     <div className="pt-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px] text-slate-300">

@@ -537,16 +537,30 @@ export class AITrafficManager {
     if (this.leadCar.isBraking) {
       this.leadCar.speed = Math.max(0, this.leadCar.speed - 55 * delta);
     } else {
-      // Cruise forward
+      // Cruise forward or match speed with obstacles ahead
       this.leadCar.speed += (this.leadCar.targetSpeed - this.leadCar.speed) * 0.1;
     }
     this.leadCar.z -= (this.leadCar.speed * 1000 / 3600) * delta;
     this.leadCarGroup.position.set(this.leadCar.x, 0, this.leadCar.z);
 
-    // Calculate Following Distance to Lead Car
+    // Calculate Following Distance to Lead Car (when lead car is ahead of player)
     const leadGap = player.z - this.leadCar.z - 4.5; // distance bumper to bumper
-    if (leadGap > 0 && leadGap < 80 && Math.abs(player.x - this.leadCar.x) < 2.0) {
+    if (leadGap > 0 && leadGap < 80 && Math.abs(player.x - this.leadCar.x) < 2.2) {
       result.followingDistanceSecs = Math.max(0, leadGap / playerSpeedMs);
+    }
+
+    // Lead Car Adaptive Cruise Control: If leadCar is BEHIND the player, it MUST NOT ram into the player
+    if (this.leadCar.z > player.z && Math.abs(player.x - this.leadCar.x) < 2.5) {
+      const rearGap = this.leadCar.z - player.z - 4.5;
+      if (rearGap < 30) {
+        this.leadCar.targetSpeed = Math.max(0, Math.min(this.leadCar.speed, player.speed - 4));
+      }
+      if (rearGap < 10) {
+        this.leadCar.speed = Math.max(0, this.leadCar.speed - 50 * delta);
+        if (this.leadCar.z < player.z + 8) {
+          this.leadCar.z = player.z + 8;
+        }
+      }
     }
 
     // 2. Kerb Car Behavior
@@ -582,23 +596,55 @@ export class AITrafficManager {
     this.cyclistGroup.position.set(this.cyclist.x, 0, this.cyclist.z);
 
     // 5. Oncoming Car Behavior (Continuous Ambient Autonomous Flow)
-    if (this.oncomingCar.isDrifting) {
-      if (this.oncomingCar.x > -0.6) {
-        this.oncomingCar.x -= 2.0 * delta; // Drifting across centerline into player lane!
-      }
-    } else {
-      this.oncomingCar.x += (2.25 - this.oncomingCar.x) * 0.1;
-    }
-    this.oncomingCar.z += (this.oncomingCar.speed * 1000 / 3600) * delta;
-    // Continuous ambient loop: reset oncoming traffic once it passes behind player
-    if (this.oncomingCar.z > player.z + 40 && !this.oncomingCar.isDrifting) {
-      this.oncomingCar.z = player.z - 170;
+    // If player is in Wattle Creek Village or Rural loop (z > 30), keep highway oncoming car away from village
+    if (player.z > 30) {
+      this.oncomingCar.z = -120;
       this.oncomingCar.x = 2.25;
-      this.oncomingCar.speed = 46 + Math.random() * 8;
+      this.oncomingCar.speed = 0;
+      this.oncomingCarGroup.position.set(this.oncomingCar.x, -50, this.oncomingCar.z); // underground/hidden
+    } else {
+      if (this.oncomingCar.isDrifting) {
+        if (this.oncomingCar.x > -0.6) {
+          this.oncomingCar.x -= 2.0 * delta; // Drifting across centerline into player lane!
+        }
+      } else {
+        this.oncomingCar.x += (2.25 - this.oncomingCar.x) * 0.1;
+      }
+
+      // Check if oncomingCar is approaching player or behind player
+      if (Math.abs(player.x - this.oncomingCar.x) < 2.2) {
+        // If in same lane, check if player is ahead in travel direction (+Z)
+        if (player.z > this.oncomingCar.z) {
+          const gap = player.z - this.oncomingCar.z - 4.5;
+          if (gap < 25) {
+            this.oncomingCar.speed = Math.max(0, Math.min(this.oncomingCar.speed, player.speed - 4));
+          }
+          if (gap < 9) {
+            this.oncomingCar.speed = 0;
+            this.oncomingCar.z = player.z - 9;
+          }
+        }
+      }
+
+      this.oncomingCar.z += (this.oncomingCar.speed * 1000 / 3600) * delta;
+
+      // Continuous ambient loop: reset oncoming traffic once it passes behind player on Highway 1
+      if (this.oncomingCar.z > player.z + 40 && !this.oncomingCar.isDrifting) {
+        this.oncomingCar.z = Math.max(-250, player.z - 170);
+        this.oncomingCar.x = 2.25;
+        this.oncomingCar.speed = 46 + Math.random() * 8;
+      }
+      this.oncomingCarGroup.position.set(this.oncomingCar.x, 0, this.oncomingCar.z);
     }
-    this.oncomingCarGroup.position.set(this.oncomingCar.x, 0, this.oncomingCar.z);
 
     // 8. Bot Ute Behavior (Traverses East-West City Cross Branch at z = -270)
+    // Yield to player if player is entering intersection at z = -270
+    const playerAtIntersection = Math.abs(player.z - (-270)) < 7.5 && Math.abs(player.x) < 7.0;
+    if (playerAtIntersection && Math.abs(this.botUte.x - player.x) < 16) {
+      this.botUte.speed = Math.max(0, this.botUte.speed - 45 * delta);
+    } else {
+      this.botUte.speed = Math.min(36, this.botUte.speed + 15 * delta);
+    }
     this.botUte.x += (this.botUte.speed * 1000 / 3600) * delta;
     if (this.botUte.x > 65) {
       this.botUte.x = -65;
@@ -611,7 +657,17 @@ export class AITrafficManager {
     this.botTaxiIndMat.color.setHex(taxiBlink ? 0xf59e0b : 0x331a00);
 
     if (this.botTaxi.z > -265) {
-      // Approaching right turn junction
+      // Approaching right turn junction - check following distance to player ahead
+      if (player.z < this.botTaxi.z && player.z > -275 && Math.abs(player.x - this.botTaxi.x) < 2.4) {
+        const gap = this.botTaxi.z - player.z - 4.5;
+        if (gap < 25) {
+          this.botTaxi.speed = Math.max(0, Math.min(this.botTaxi.speed, player.speed - 4));
+        }
+        if (gap < 9) {
+          this.botTaxi.speed = 0;
+          this.botTaxi.z = Math.max(this.botTaxi.z, player.z + 9);
+        }
+      }
       this.botTaxi.z -= (this.botTaxi.speed * 1000 / 3600) * delta;
       this.botTaxiGroup.rotation.y = 0;
     } else if (this.botTaxi.x < 45) {
@@ -621,9 +677,14 @@ export class AITrafficManager {
       this.botTaxiGroup.rotation.y = this.botTaxi.rotY;
       this.botTaxi.x += (28 * 1000 / 3600) * delta;
     } else {
-      // Reset taxi back to north approach
+      // Reset taxi back to north approach, ensuring safe separation from player
       this.botTaxi.x = 1.2;
-      this.botTaxi.z = -170;
+      let spawnZ = -170;
+      if (Math.abs(player.z - spawnZ) < 35) {
+        spawnZ = player.z - 65;
+      }
+      this.botTaxi.z = spawnZ;
+      this.botTaxi.speed = 40;
       this.botTaxi.rotY = 0;
       this.botTaxiGroup.rotation.y = 0;
     }
@@ -642,16 +703,32 @@ export class AITrafficManager {
       result.followingDistanceSecs = Math.max(0, closestAheadDist / playerSpeedMs);
     }
 
-    // Check collisions with ambient bot vehicles
+    // Check collisions with ambient bot vehicles (Directional Contact Checking)
+    // In Australian road rules, a rear-end collision where another vehicle hits the player's rear
+    // is NOT the player's fault (Rule 126). Only front / lateral collisions where player failed
+    // to yield trigger failure.
     const botCars = [
       { name: 'Oncoming Blue Sedan', x: this.oncomingCar.x, z: this.oncomingCar.z, w: 2.0, l: 4.4 },
       { name: 'Australian White Ute', x: this.botUte.x, z: this.botUte.z, w: 2.1, l: 4.6 },
       { name: 'City Taxi', x: this.botTaxi.x, z: this.botTaxi.z, w: 2.0, l: 4.4 }
     ];
+
+    const fwdX = -Math.sin(player.rotation);
+    const fwdZ = -Math.cos(player.rotation);
+
     for (const b of botCars) {
-      if (Math.hypot(player.x - b.x, player.z - b.z) < 2.6) {
-        result.collisionDetected = b.name;
-        break;
+      const dist = Math.hypot(player.x - b.x, player.z - b.z);
+      if (dist < 2.6) {
+        const dx = b.x - player.x;
+        const dz = b.z - player.z;
+        const dotFwd = dx * fwdX + dz * fwdZ;
+
+        // If the contact is from behind the player (dotFwd < -0.6), the AI vehicle rear-ended the player.
+        // The student driver is NEVER failed for an AI vehicle crashing into their back!
+        if (dotFwd >= -0.6) {
+          result.collisionDetected = b.name;
+          break;
+        }
       }
     }
 
@@ -661,6 +738,23 @@ export class AITrafficManager {
       const strobe = Math.sin(now * 0.02) > 0;
       this.ambulanceBlueLight.emissiveIntensity = strobe ? 3.0 : 0.2;
       this.ambulanceRedLight.emissiveIntensity = !strobe ? 3.0 : 0.2;
+
+      // Intelligent emergency yield behavior: check distance to player
+      const ambGap = this.ambulance.z - player.z - 4.5;
+      if (ambGap > 0 && ambGap < 25) {
+        if (player.x < -2.8 || (player.x <= -2.4 && player.speed < 15)) {
+          // Player yielded left! Ambulance accelerates past safely on the right
+          this.ambulance.x += (0.5 - this.ambulance.x) * 0.08;
+          this.ambulance.speed = 65;
+        } else {
+          // Player is still in lane: ambulance slows to avoid rear-ending player!
+          this.ambulance.speed = Math.max(12, Math.min(this.ambulance.speed, player.speed - 3));
+          if (ambGap < 8) {
+            this.ambulance.speed = Math.max(0, player.speed);
+            this.ambulance.z = player.z + 8.5;
+          }
+        }
+      }
 
       this.ambulance.z -= (this.ambulance.speed * 1000 / 3600) * delta;
       if (this.ambulance.z < player.z - 5) {
@@ -690,7 +784,7 @@ export class AITrafficManager {
 
       // 1. Sudden Braking Hazard Evaluation
       if (this.currentHazard === 'sudden_braking') {
-        if (leadGap < 0.5) {
+        if (leadGap >= 0 && leadGap < 0.6 && Math.abs(player.x - this.leadCar.x) < 2.0) {
           result.hazardStatus = 'failed';
           result.feedback = 'CRITICAL FAIL: Rear-end collision with lead vehicle! Failed to maintain 3-second cushion (Rule 126).';
           result.collisionDetected = 'Lead Car (Rear-end)';
@@ -804,6 +898,51 @@ export class AITrafficManager {
     }
 
     return result;
+  }
+
+  public resetPositions(playerX: number, playerZ: number, playerRotation = 0) {
+    this.clearHazard();
+
+    if (playerZ <= 30 && playerZ >= -260) {
+      // Highway 1 environment: place leadCar ahead and oncomingCar in opposite lane
+      this.leadCar.x = -2.25;
+      this.leadCar.z = playerZ - 35;
+      this.leadCar.speed = 42;
+      this.leadCar.targetSpeed = 42;
+      this.leadCar.isBraking = false;
+
+      this.oncomingCar.x = 2.25;
+      this.oncomingCar.z = playerZ - 140;
+      this.oncomingCar.speed = 48;
+      this.oncomingCar.isDrifting = false;
+
+      this.botTaxi.x = 1.2;
+      this.botTaxi.z = Math.min(-170, playerZ - 60);
+      this.botTaxi.speed = 40;
+    } else {
+      // Village or Rural loops (z > 30): keep highway cars safely parked/clear of the village
+      this.leadCar.x = -2.25;
+      this.leadCar.z = -50;
+      this.leadCar.speed = 0;
+
+      this.oncomingCar.x = 2.25;
+      this.oncomingCar.z = -120;
+      this.oncomingCar.speed = 0;
+
+      this.botTaxi.x = 1.2;
+      this.botTaxi.z = -180;
+      this.botTaxi.speed = 0;
+    }
+
+    this.ambulance.x = -2.25;
+    this.ambulance.z = playerZ + 80;
+    this.ambulance.speed = 0;
+    this.ambulance.isActive = false;
+
+    this.leadCarGroup.position.set(this.leadCar.x, 0, this.leadCar.z);
+    this.oncomingCarGroup.position.set(this.oncomingCar.x, playerZ > 30 ? -50 : 0, this.oncomingCar.z);
+    this.botTaxiGroup.position.set(this.botTaxi.x, 0, this.botTaxi.z);
+    this.ambulanceGroup.position.set(this.ambulance.x, 0, this.ambulance.z);
   }
 
   public dispose() {

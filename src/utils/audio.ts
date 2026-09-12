@@ -10,6 +10,8 @@ class SoundEngine {
   private hornOsc2: OscillatorNode | null = null;
   private hornGain: GainNode | null = null;
   private indicatorInterval: number | null = null;
+  private rainSource: AudioBufferSourceNode | null = null;
+  private rainGain: GainNode | null = null;
   private isMuted = false;
 
   private initContext() {
@@ -380,6 +382,105 @@ class SoundEngine {
 
   public playLevelPass() {
     this.playSuccessChime();
+  }
+
+  public playCelebrationFanfare() {
+    if (this.isMuted) return;
+    try {
+      this.initContext();
+      if (!this.ctx) return;
+
+      // Triumphant fanfare notes: C4, G4, C5, E5, G5
+      const notes = [
+        { freq: 261.63, delay: 0.0, dur: 0.18 },
+        { freq: 392.00, delay: 0.18, dur: 0.18 },
+        { freq: 523.25, delay: 0.36, dur: 0.22 },
+        { freq: 659.25, delay: 0.58, dur: 0.22 },
+        { freq: 783.99, delay: 0.80, dur: 0.65 }
+      ];
+
+      const now = this.ctx.currentTime;
+      notes.forEach(({ freq, delay, dur }) => {
+        if (!this.ctx) return;
+        const osc = this.ctx.createOscillator();
+        const gain = this.ctx.createGain();
+
+        osc.type = 'triangle';
+        osc.frequency.setValueAtTime(freq, now + delay);
+
+        const startTime = now + delay;
+        gain.gain.setValueAtTime(0.12, startTime);
+        gain.gain.exponentialRampToValueAtTime(0.001, startTime + dur);
+
+        osc.connect(gain);
+        gain.connect(this.ctx.destination);
+
+        osc.start(startTime);
+        osc.stop(startTime + dur + 0.05);
+      });
+    } catch {
+      // silent
+    }
+  }
+
+  public startRainAmbience() {
+    if (this.isMuted || this.rainSource) return;
+    try {
+      this.initContext();
+      if (!this.ctx) return;
+      const bufferSize = this.ctx.sampleRate * 2;
+      const buffer = this.ctx.createBuffer(1, bufferSize, this.ctx.sampleRate);
+      const data = buffer.getChannelData(0);
+      for (let i = 0; i < bufferSize; i++) {
+        data[i] = (Math.random() * 2 - 1) * 0.22;
+      }
+      this.rainSource = this.ctx.createBufferSource();
+      this.rainSource.buffer = buffer;
+      this.rainSource.loop = true;
+
+      const filter = this.ctx.createBiquadFilter();
+      filter.type = 'lowpass';
+      filter.frequency.setValueAtTime(1100, this.ctx.currentTime);
+
+      this.rainGain = this.ctx.createGain();
+      this.rainGain.gain.setValueAtTime(0.045, this.ctx.currentTime);
+
+      this.rainSource.connect(filter);
+      filter.connect(this.rainGain);
+      this.rainGain.connect(this.ctx.destination);
+      this.rainSource.start();
+    } catch {
+      // silent
+    }
+  }
+
+  public stopRainAmbience() {
+    if (this.rainSource) {
+      try {
+        this.rainSource.stop();
+        this.rainSource.disconnect();
+      } catch {
+        // silent
+      }
+      this.rainSource = null;
+      this.rainGain = null;
+    }
+  }
+
+  public speakAnnouncement(text: string) {
+    if (this.isMuted) return;
+    try {
+      if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
+        window.speechSynthesis.cancel(); // Stop any pending speech
+        const utterance = new SpeechSynthesisUtterance(text);
+        utterance.rate = 1.0;
+        utterance.pitch = 1.05;
+        utterance.volume = 0.9;
+        window.speechSynthesis.speak(utterance);
+      }
+    } catch {
+      // Speech API not allowed or available
+    }
   }
 }
 

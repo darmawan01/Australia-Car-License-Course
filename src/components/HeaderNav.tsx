@@ -1,5 +1,5 @@
 import React from 'react';
-import { CameraView, DrivingLevel, LevelCategory, LicenseStage, TestMode } from '../types';
+import { CameraView, CourseEnvironment, DrivingLevel, LevelCategory, LicenseStage, TestMode } from '../types';
 import {
   Car,
   Compass,
@@ -12,7 +12,9 @@ import {
   Award,
   ChevronDown,
   Video,
-  Keyboard
+  Keyboard,
+  Save,
+  CloudRain
 } from 'lucide-react';
 
 interface HeaderNavProps {
@@ -30,6 +32,9 @@ interface HeaderNavProps {
   onResetCar: () => void;
   cameraView: CameraView;
   onSetCameraView: (view: CameraView) => void;
+  onOpenSaveModal?: () => void;
+  onOpenSituationCard?: () => void;
+  activeEnvironment?: CourseEnvironment;
 }
 
 export const HeaderNav: React.FC<HeaderNavProps> = ({
@@ -46,7 +51,10 @@ export const HeaderNav: React.FC<HeaderNavProps> = ({
   onOpenShortcuts,
   onResetCar,
   cameraView,
-  onSetCameraView
+  onSetCameraView,
+  onOpenSaveModal,
+  onOpenSituationCard,
+  activeEnvironment
 }) => {
   // Cycle camera views quickly
   const cycleCameraView = () => {
@@ -190,6 +198,27 @@ export const HeaderNav: React.FC<HeaderNavProps> = ({
           <kbd className="hidden sm:inline px-1 py-0.2 rounded bg-slate-800 text-[9px] font-mono text-slate-400">C</kbd>
         </button>
 
+        {/* Course Atmosphere & Weather Preset Switcher */}
+        {onOpenSituationCard && (
+          <button
+            id="open-situation-nav-btn"
+            onClick={onOpenSituationCard}
+            className={`px-2.5 py-1.5 rounded-xl border font-bold flex items-center gap-1.5 transition-all ${
+              activeEnvironment === 'rainy_wet'
+                ? 'bg-cyan-950/70 border-cyan-500/50 text-cyan-300 hover:bg-cyan-900/60 shadow-md shadow-cyan-950/50'
+                : activeEnvironment === 'school_rush'
+                ? 'bg-amber-950/70 border-amber-500/50 text-amber-300 hover:bg-amber-900/60'
+                : 'bg-slate-900 hover:bg-slate-800 border-slate-700/80 text-slate-200 hover:text-white'
+            }`}
+            title="View Course Atmosphere, Real-World Situation & Weather Presets"
+          >
+            <CloudRain className="w-3.5 h-3.5 text-cyan-400" />
+            <span className="hidden lg:inline text-xs">
+              {activeEnvironment === 'rainy_wet' ? 'Rainy' : activeEnvironment === 'school_rush' ? 'School Rush' : 'Atmosphere'}
+            </span>
+          </button>
+        )}
+
         {/* Day / Night Vision Mode Toggle */}
         <button
           id="nightmode-toggle-btn"
@@ -204,6 +233,19 @@ export const HeaderNav: React.FC<HeaderNavProps> = ({
           {isNightMode ? <Moon className="w-3.5 h-3.5 text-blue-400 fill-blue-400/20" /> : <SunMedium className="w-3.5 h-3.5 text-amber-400" />}
           <span className="hidden sm:inline text-xs">{isNightMode ? 'Night Vision' : 'Daylight'}</span>
         </button>
+
+        {/* Save / Resume Test */}
+        {onOpenSaveModal && (
+          <button
+            id="open-save-modal-btn"
+            onClick={onOpenSaveModal}
+            className="px-2.5 py-1.5 rounded-xl bg-slate-900 hover:bg-slate-800 border border-slate-700/80 text-blue-300 hover:text-white font-bold flex items-center gap-1.5 transition-all shadow-sm"
+            title="Save Game or Resume Test Progress"
+          >
+            <Save className="w-3.5 h-3.5 text-blue-400" />
+            <span className="hidden sm:inline">Save/Resume</span>
+          </button>
+        )}
 
         {/* Reset Car */}
         <button

@@ -89,9 +89,9 @@ export const ROAD_CHECKPOINTS: RoadCheckpoint[] = [
     id: 8,
     title: 'Checkpoint 8: Australian Roundabout Entry',
     shortDesc: 'Enter clockwise. Give way to circulating vehicles on your right. Signal left [Q / U] to exit.',
-    targetX: -2.25,
-    targetZ: -345,
-    radius: 8,
+    targetX: -6.5,
+    targetZ: -338,
+    radius: 11,
     speedLimit: 30,
     hint: 'Slow to 20-25 km/h. Steer clockwise around island, press [Q / U] to indicate left when leaving.',
     requiredGear: 'D',
@@ -108,5 +108,53 @@ export const ROAD_CHECKPOINTS: RoadCheckpoint[] = [
     hint: 'Cross the finish line! Shift to Park [1 / P] and engage handbrake to finish the test run.',
     requiredGear: 'P',
     keyInstructions: ['Cross Line', '1 / P Secure']
+  },
+  {
+    id: 10,
+    title: 'Checkpoint 10: Wattle Creek Village Gateway',
+    shortDesc: 'Enter historic Wattle Creek country village. Pass welcome gateway and reduce speed to 50 km/h.',
+    targetX: -2.25,
+    targetZ: 50,
+    radius: 9,
+    speedLimit: 50,
+    hint: 'Approaching Wattle Creek township. Keep strictly left on the country approach road.',
+    requiredGear: 'D',
+    keyInstructions: ['Keep Left', 'Speed <= 50', 'Scan Gateway']
+  },
+  {
+    id: 11,
+    title: 'Checkpoint 11: Village High Street & Bakery',
+    shortDesc: 'Village precinct 40 km/h active. Scan for pedestrians outside the Bushman\'s Rest Hotel & Bakery.',
+    targetX: -2.25,
+    targetZ: 140,
+    radius: 9,
+    speedLimit: 40,
+    hint: 'Slow down to 40 km/h in the village center. Watch for parked country utes and bakery visitors.',
+    requiredGear: 'D',
+    keyInstructions: ['Speed <= 40', 'Watch Pedestrians', 'Stay Left']
+  },
+  {
+    id: 12,
+    title: 'Checkpoint 12: The Village Green & Windmill',
+    shortDesc: 'Navigate around the historic Village Green and Southern Cross windmill. Give way to your right.',
+    targetX: -3.5,
+    targetZ: 235,
+    radius: 12,
+    speedLimit: 30,
+    hint: 'Slow to 25 km/h around the Village Green circle. Indicate left to take the East Farmstead branch.',
+    requiredGear: 'D',
+    keyInstructions: ['Clockwise Circle', 'Yield Right', 'Indicate Exit']
+  },
+  {
+    id: 13,
+    title: 'Checkpoint 13: Country Farmstead & Cattle Grid',
+    shortDesc: 'Drive East Farmstead Lane past barns, hay bales, and the cattle grid crossing.',
+    targetX: 65,
+    targetZ: 235,
+    radius: 10,
+    speedLimit: 50,
+    hint: 'Narrow country bitumen lane. Maintain safe lateral distance from timber farm fences and cattle grid markers.',
+    requiredGear: 'D',
+    keyInstructions: ['Farmstead Lane', 'Cattle Grid', 'Rural Cushion']
   }
 ];

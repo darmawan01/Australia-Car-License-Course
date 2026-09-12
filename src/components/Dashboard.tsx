@@ -12,9 +12,12 @@ import {
   Maximize2,
   TriangleAlert,
   Sparkles,
-  BookOpen
+  BookOpen,
+  Activity,
+  Save
 } from 'lucide-react';
 import { soundManager } from '../utils/audio';
+import { RealtimeTelemetryChart } from './RealtimeTelemetryChart';
 
 interface DashboardProps {
   vehicleState: VehicleState;
@@ -30,6 +33,7 @@ interface DashboardProps {
   isLookingBehind?: boolean;
   onToggleLookBehind?: () => void;
   onOpenSeasonGuide?: () => void;
+  onOpenSaveModal?: () => void;
 }
 
 const GEAR_CONFIG: Record<Gear, { label: string; key: string; color: string; activeStyle: string; hint: string }> = {
@@ -73,16 +77,38 @@ export const Dashboard: React.FC<DashboardProps> = ({
   currentSpeedLimit,
   isLookingBehind = false,
   onToggleLookBehind,
-  onOpenSeasonGuide
+  onOpenSeasonGuide,
+  onOpenSaveModal
 }) => {
   const [isCarFocusMode, setIsCarFocusMode] = useState<boolean>(false);
+  const [showTelemetry, setShowTelemetry] = useState<boolean>(true);
   const isSpeeding = Math.abs(vehicleState.speed) > currentSpeedLimit + 1;
   const isMuted = soundManager.getIsMuted();
   const speed = Math.round(Math.abs(vehicleState.speed));
   const speedRatio = Math.min(1, speed / 80);
 
+  // Compute realistic throttle output percentage (0 - 100%)
+  const throttlePercent = vehicleState.handbrake
+    ? 0
+    : vehicleState.gear === 'P' || vehicleState.gear === 'N'
+    ? 0
+    : Math.min(100, Math.round(Math.max(0, (speed / Math.max(1, currentSpeedLimit)) * 90 + (speed > 2 ? 10 : 0))));
+
   return (
     <div className="pointer-events-none absolute inset-x-0 bottom-0 flex flex-col justify-end p-2 sm:p-3 z-20">
+      {/* Real-time D3.js Telemetry Line Chart (Speed & Throttle) */}
+      {showTelemetry && !isCarFocusMode && (
+        <div className="pointer-events-auto self-center w-full max-w-3xl mb-1.5 flex justify-end">
+          <div className="w-72 sm:w-80">
+            <RealtimeTelemetryChart
+              speed={speed}
+              throttle={throttlePercent}
+              speedLimit={currentSpeedLimit}
+            />
+          </div>
+        </div>
+      )}
+
       {/* Speed Warning Banner if Exceeded */}
       {isSpeeding && (
         <div className="self-center mb-2 bg-red-600/90 text-white px-3 py-1 rounded-full text-xs font-bold uppercase tracking-wide flex items-center gap-1.5 shadow-lg animate-pulse border border-red-400">
@@ -381,6 +407,34 @@ export const Dashboard: React.FC<DashboardProps> = ({
                   title="Open Season Curriculum & Step-by-Step Practice Guide"
                 >
                   <BookOpen className="w-3.5 h-3.5" />
+                </button>
+              )}
+
+              {/* D3 Telemetry Toggle Button */}
+              <button
+                id="toggle-telemetry-btn"
+                onClick={() => setShowTelemetry(prev => !prev)}
+                className={`w-8 h-8 rounded-lg flex flex-col items-center justify-center border transition-all ${
+                  showTelemetry
+                    ? 'bg-cyan-950/80 border-cyan-500/60 text-cyan-300 shadow-sm'
+                    : 'bg-slate-900 border-slate-800 text-slate-400 hover:bg-slate-850 hover:text-white'
+                }`}
+                title={showTelemetry ? 'Hide Realtime D3 Telemetry Chart' : 'Show Realtime D3 Telemetry Chart'}
+              >
+                <Activity className="w-3.5 h-3.5" />
+                <span className="text-[6px] font-mono font-bold leading-none mt-0.5">D3</span>
+              </button>
+
+              {/* Save Game Button */}
+              {onOpenSaveModal && (
+                <button
+                  id="dash-save-game-btn"
+                  onClick={onOpenSaveModal}
+                  className="w-8 h-8 rounded-lg bg-blue-950/80 hover:bg-blue-900 border border-blue-600/50 text-blue-300 hover:text-white flex flex-col items-center justify-center transition-all shadow-sm"
+                  title="Save & Resume Test Session"
+                >
+                  <Save className="w-3.5 h-3.5" />
+                  <span className="text-[6px] font-mono font-bold leading-none mt-0.5">SAVE</span>
                 </button>
               )}
 

@@ -44,6 +44,7 @@ interface AssessmentHUDProps {
     completedLevelTitle: string;
   } | null;
   onCancelAutoAdvance?: () => void;
+  onOpenSituationCard?: () => void;
 }
 
 export const AssessmentHUD: React.FC<AssessmentHUDProps> = ({
@@ -67,7 +68,8 @@ export const AssessmentHUD: React.FC<AssessmentHUDProps> = ({
   showCarBeacon = true,
   onToggleCarBeacon,
   autoAdvance,
-  onCancelAutoAdvance
+  onCancelAutoAdvance,
+  onOpenSituationCard
 }) => {
   const [isCollapsed, setIsCollapsed] = useState<boolean>(false);
 
@@ -144,6 +146,42 @@ export const AssessmentHUD: React.FC<AssessmentHUDProps> = ({
             </button>
           </div>
         </div>
+
+        {/* Course Situation & Atmospheric Condition Strip */}
+        {currentLevel.situation && (
+          <div className="flex items-center justify-between px-2.5 py-1.5 rounded-xl bg-slate-900/90 border border-slate-800 text-[11px]">
+            <div className="flex items-center gap-2 min-w-0">
+              <span className="text-amber-400 font-bold shrink-0">
+                {currentLevel.situation.environment === 'morning_sunrise' && '🌅'}
+                {currentLevel.situation.environment === 'midday_clear' && '☀️'}
+                {currentLevel.situation.environment === 'school_rush' && '🏫'}
+                {currentLevel.situation.environment === 'rainy_wet' && '🌧️'}
+                {currentLevel.situation.environment === 'dusk_sunset' && '🌇'}
+                {currentLevel.situation.environment === 'night_twilight' && '🌙'}
+              </span>
+              <div className="min-w-0 truncate">
+                <span className="font-semibold text-slate-200">
+                  {currentLevel.situation.timeLabel.split('•')[0].trim()}
+                </span>
+                <span className="text-slate-500 mx-1">•</span>
+                <span className="text-slate-300">
+                  {currentLevel.situation.weatherLabel.split('•')[0].trim()}
+                </span>
+              </div>
+            </div>
+
+            {onOpenSituationCard && (
+              <button
+                id="hud-open-situation-btn"
+                onClick={onOpenSituationCard}
+                className="px-2 py-0.5 rounded-md bg-blue-600/20 hover:bg-blue-600/30 border border-blue-500/40 text-blue-300 text-[10px] font-bold flex items-center gap-1 shrink-0 transition-colors"
+                title="View Situation Details & Weather Presets"
+              >
+                <span>Atmosphere</span>
+              </button>
+            )}
+          </div>
+        )}
 
         {/* Active Checkpoint Milestone Indicator */}
         {activeCheckpoint && (
